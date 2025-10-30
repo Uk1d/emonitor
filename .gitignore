@@ -1,0 +1,49 @@
+# 构建产物
+build/
+*.o
+*.so
+*.a
+
+# Go 相关
+src/go/go.sum
+vendor/
+
+# Python 相关
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# eBPF 相关
+src/bpf/vmlinux.h
+*.skel.h
+
+# 日志文件
+logs/
+*.log
+
+# 临时文件
+*.tmp
+*.swp
+*.swo
+*~
+
+# IDE 文件
+.vscode/
+.idea/
+*.iml
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 配置文件（可能包含敏感信息）
+config/*.yaml
+config/*.json
+!config/example.*
