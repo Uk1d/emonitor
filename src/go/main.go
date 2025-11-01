@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -463,13 +464,24 @@ func matchCondition(event *EventJSON, condition map[string]interface{}) bool {
 }
 
 func main() {
+	// 命令行参数解析
+	var (
+		configPath = flag.String("config", "config/security_rules.yaml", "安全规则配置文件路径")
+		dashboard  = flag.Bool("dashboard", false, "启用命令行Dashboard")
+		pidMin     = flag.Uint("pid-min", 0, "过滤PID最小值")
+		pidMax     = flag.Uint("pid-max", 0, "过滤PID最大值")
+		uidMin     = flag.Uint("uid-min", 0, "过滤UID最小值")
+		uidMax     = flag.Uint("uid-max", 0, "过滤UID最大值")
+	)
+	flag.Parse()
+
 	// 移除内存限制
 	if err := rlimit.RemoveMemlock(); err != nil {
 		log.Fatal(err)
 	}
 
 	// 加载安全配置
-	config, err := loadSecurityConfig("config/security_rules.yaml")
+	config, err := loadSecurityConfig(*configPath)
 	if err != nil {
 		log.Printf("Warning: Failed to load security config: %v", err)
 		config = &SecurityConfig{} // 使用默认配置
@@ -504,15 +516,8 @@ func main() {
 	execLink, err := link.Tracepoint("syscalls", "sys_enter_execve", coll.Programs["trace_execve"], nil)
 	if err != nil {
 		log.Printf("警告: 无法附加到 execve 跟踪点: %v", err)
-		log.Printf("尝试使用 kprobe 替代...")
-		// 尝试使用 kprobe 作为替代方案
-		execLink, err = link.Kprobe("do_execve", coll.Programs["trace_execve"], nil)
-		if err != nil {
-			log.Printf("kprobe 也失败了: %v", err)
-			execLink = nil
-		}
-	}
-	if execLink != nil {
+		execLink = nil
+	} else {
 		defer execLink.Close()
 	}
 
@@ -520,15 +525,8 @@ func main() {
 	exitLink, err := link.Tracepoint("sched", "sched_process_exit", coll.Programs["trace_exit"], nil)
 	if err != nil {
 		log.Printf("警告: 无法附加到 exit 跟踪点: %v", err)
-		log.Printf("尝试使用 kprobe 替代...")
-		// 尝试使用 kprobe 作为替代方案
-		exitLink, err = link.Kprobe("do_exit", coll.Programs["trace_exit"], nil)
-		if err != nil {
-			log.Printf("kprobe 也失败了: %v", err)
-			exitLink = nil
-		}
-	}
-	if exitLink != nil {
+		exitLink = nil
+	} else {
 		defer exitLink.Close()
 	}
 
@@ -578,13 +576,21 @@ func main() {
 	var eventCount uint64
 	startTime := time.Now()
 
+	// 初始化Dashboard（如果启用）
+	var dashboardInstance *Dashboard
+	if *dashboard {
+		dashboardInstance = NewDashboard()
+		go dashboardInstance.Start()
+		log.Println("✓ 命令行Dashboard已启动")
+	}
+
 	// 信号处理
 	go func() {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 		sig := <-c
 		log.Printf("接收到信号 %v，正在优雅关闭程序...", sig)
-		
+
 		// 显示统计信息
 		duration := time.Since(startTime)
 		log.Printf("程序运行时间: %v", duration.Round(time.Second))
@@ -592,29 +598,55 @@ func main() {
 		if duration.Seconds() > 0 {
 			log.Printf("平均事件处理速率: %.2f 事件/秒", float64(eventCount)/duration.Seconds())
 		}
-		
+
 		cancel()
 	}()
 
 	log.Println("程序正在运行，按 Ctrl+C 退出...")
 
 	// 事件处理循环
+	eventChan := make(chan ringbuf.Record, 10)
+	errorChan := make(chan error, 1)
+
+	// 启动读取goroutine
+	go func() {
+		defer close(eventChan)
+		defer close(errorChan)
+
+		for {
+			record, err := rd.Read()
+			if err != nil {
+				select {
+				case errorChan <- err:
+				case <-ctx.Done():
+					return
+				}
+				return
+			}
+
+			select {
+			case eventChan <- record:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
 			log.Println("程序已安全退出")
 			return
-		default:
-			record, err := rd.Read()
-			if err != nil {
-				if err == ringbuf.ErrClosed {
-					log.Println("环形缓冲区已关闭，程序退出")
-					return
-				}
-				log.Printf("从环形缓冲区读取数据时出错: %v", err)
-				continue
-			}
 
+		case err := <-errorChan:
+			if err == ringbuf.ErrClosed {
+				log.Println("环形缓冲区已关闭，程序退出")
+				return
+			}
+			log.Printf("从环形缓冲区读取数据时出错: %v", err)
+			return
+
+		case record := <-eventChan:
 			// 解析事件
 			var rawEvent RawEvent
 			if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &rawEvent); err != nil {
@@ -628,12 +660,33 @@ func main() {
 			// 转换为JSON格式
 			event := convertToJSON(&rawEvent)
 
+			// 应用过滤条件
+			if *pidMin > 0 && event.PID < uint32(*pidMin) {
+				continue
+			}
+			if *pidMax > 0 && event.PID > uint32(*pidMax) {
+				continue
+			}
+			if *uidMin > 0 && event.UID < uint32(*uidMin) {
+				continue
+			}
+			if *uidMax > 0 && event.UID > uint32(*uidMax) {
+				continue
+			}
+
 			// 应用安全规则
 			matchSecurityRules(event, config)
 
+			// 更新Dashboard统计（如果启用）
+			if dashboardInstance != nil {
+				dashboardInstance.UpdateStats(event)
+			}
+
 			// 输出JSON
 			if jsonData, err := json.Marshal(event); err == nil {
-				fmt.Println(string(jsonData))
+				if !*dashboard {
+					fmt.Println(string(jsonData))
+				}
 			}
 		}
 	}

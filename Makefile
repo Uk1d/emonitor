@@ -75,10 +75,10 @@ $(BPF_OBJECT): $(BPF_MAIN_SOURCE) $(VMLINUX_H)
 .PHONY: go
 go: $(GO_BINARY)
 
-$(GO_BINARY): $(GO_SRC_DIR)/main.go $(BPF_OBJECT)
+$(GO_BINARY): $(GO_SRC_DIR)/*.go $(BPF_OBJECT)
 	@echo "编译 Go 程序..."
 	cd $(GO_SRC_DIR) && $(GO) mod tidy
-	cd $(GO_SRC_DIR) && $(GO) build $(GO_FLAGS) -o ../../$(GO_BINARY) main.go
+	cd $(GO_SRC_DIR) && $(GO) build $(GO_FLAGS) -o ../../$(GO_BINARY) .
 	@echo "✓ Go 程序编译完成"
 
 # 安装依赖
