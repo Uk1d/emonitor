@@ -23,7 +23,7 @@ type AggregatedStats struct {
 	TopUsers          []UserAggregation
 	SecurityAlerts    []SecurityAlert
 	NetworkConnections []NetworkConnection
-	FileOperations    []FileOperation
+	FileOperations    []FileOperationAggregation
 	LastUpdate        time.Time
 }
 
@@ -78,8 +78,8 @@ type NetworkConnection struct {
 	Processes map[string]uint64 `json:"processes"`
 }
 
-// FileOperation 文件操作统计
-type FileOperation struct {
+// FileOperationAggregation 用于聚合文件操作统计
+type FileOperationAggregation struct {
 	Filename  string    `json:"filename"`
 	Operation string    `json:"operation"`
 	Count     uint64    `json:"count"`
@@ -91,20 +91,20 @@ type FileOperation struct {
 // NewAggregatedStats 创建新的聚合统计实例
 func NewAggregatedStats() *AggregatedStats {
 	return &AggregatedStats{
-		StartTime:          time.Now(),
-		EventsByType:       make(map[string]uint64),
-		EventsByUID:        make(map[uint32]uint64),
-		EventsByPID:        make(map[uint32]uint64),
-		EventsByComm:       make(map[string]uint64),
-		EventsBySeverity:   make(map[string]uint64),
-		EventsByHour:       make(map[int]uint64),
-		TopProcesses:       make([]ProcessAggregation, 0),
-		TopSyscalls:        make([]SyscallAggregation, 0),
-		TopUsers:           make([]UserAggregation, 0),
-		SecurityAlerts:     make([]SecurityAlert, 0),
+		StartTime:         time.Now(),
+		EventsByType:      make(map[string]uint64),
+		EventsByUID:       make(map[uint32]uint64),
+		EventsByPID:       make(map[uint32]uint64),
+		EventsByComm:      make(map[string]uint64),
+		EventsBySeverity:  make(map[string]uint64),
+		EventsByHour:      make(map[int]uint64),
+		TopProcesses:      make([]ProcessAggregation, 0),
+		TopSyscalls:       make([]SyscallAggregation, 0),
+		TopUsers:          make([]UserAggregation, 0),
+		SecurityAlerts:    make([]SecurityAlert, 0),
 		NetworkConnections: make([]NetworkConnection, 0),
-		FileOperations:     make([]FileOperation, 0),
-		LastUpdate:         time.Now(),
+		FileOperations:    make([]FileOperationAggregation, 0),
+		LastUpdate:        time.Now(),
 	}
 }
 
@@ -361,7 +361,7 @@ func (as *AggregatedStats) recordFileOperation(event *EventJSON, now time.Time) 
 	}
 
 	if !found {
-		newOp := FileOperation{
+		newOp := FileOperationAggregation{
 			Filename:  event.Filename,
 			Operation: operation,
 			Count:     1,
@@ -435,7 +435,7 @@ func (as *AggregatedStats) GetStats() AggregatedStats {
 	stats.NetworkConnections = make([]NetworkConnection, len(as.NetworkConnections))
 	copy(stats.NetworkConnections, as.NetworkConnections)
 
-	stats.FileOperations = make([]FileOperation, len(as.FileOperations))
+	stats.FileOperations = make([]FileOperationAggregation, len(as.FileOperations))
 	copy(stats.FileOperations, as.FileOperations)
 
 	return stats

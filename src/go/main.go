@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -398,6 +399,56 @@ func convertToJSON(raw *RawEvent) *EventJSON {
 }
 
 // 加载安全配置
+// 加载增强安全配置到规则引擎
+func loadEnhancedSecurityConfig(configPath string, ruleEngine *EnhancedRuleEngine) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("读取配置文件失败: %v", err)
+	}
+
+	var config struct {
+		Global          EnhancedGlobalConfig               `yaml:"global"`
+		DetectionRules  map[string][]EnhancedDetectionRule `yaml:"detection_rules"`
+		Whitelist       WhitelistConfig                    `yaml:"whitelist"`
+		ResponseActions ResponseActionsConfig              `yaml:"response_actions"`
+		Logging         struct {
+			Level      string `yaml:"level"`
+			OutputFile string `yaml:"output_file"`
+		} `yaml:"logging"`
+	}
+
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("解析配置文件失败: %v", err)
+	}
+
+	// 设置全局配置
+	ruleEngine.GlobalConfig = config.Global
+
+	// 设置白名单配置
+	ruleEngine.WhitelistConfig = config.Whitelist
+
+	// 设置响应动作配置
+	ruleEngine.ResponseActions = config.ResponseActions
+
+	// 加载检测规则
+	ruleEngine.Rules = make(map[string][]EnhancedDetectionRule)
+	log.Printf("开始加载检测规则，发现 %d 个类别", len(config.DetectionRules))
+	
+	totalRules := 0
+	for category, rules := range config.DetectionRules {
+		log.Printf("加载类别 '%s': %d 条规则", category, len(rules))
+		for i := range rules {
+			rules[i].Category = category
+			log.Printf("  规则 %d: %s (启用: %v)", i, rules[i].Name, rules[i].Enabled)
+		}
+		ruleEngine.Rules[category] = rules
+		totalRules += len(rules)
+	}
+
+	log.Printf("成功加载 %d 个类别的 %d 条安全规则", len(ruleEngine.Rules), totalRules)
+	return nil
+}
+
 func loadSecurityConfig(configPath string) (*SecurityConfig, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -464,6 +515,20 @@ func matchCondition(event *EventJSON, condition map[string]interface{}) bool {
 }
 
 func main() {
+	// 检查是否运行测试
+	if len(os.Args) > 1 && os.Args[1] == "test" {
+		// 移除 "test" 参数，让测试框架处理剩余参数
+		os.Args = append(os.Args[:1], os.Args[2:]...)
+		RunTestCommand()
+		return
+	}
+
+	// 检查是否运行集成测试
+	if len(os.Args) > 1 && os.Args[1] == "integration-test" {
+		RunIntegrationTestCommand()
+		return
+	}
+
 	// 命令行参数解析
 	var (
 		configPath = flag.String("config", "config/security_rules.yaml", "安全规则配置文件路径")
@@ -480,11 +545,82 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// 加载安全配置
-	config, err := loadSecurityConfig(*configPath)
-	if err != nil {
-		log.Printf("Warning: Failed to load security config: %v", err)
-		config = &SecurityConfig{} // 使用默认配置
+	// 创建并初始化增强规则引擎
+	ruleEngine := NewEnhancedRuleEngine()
+
+	// 创建性能监控器
+	perfMonitor := NewPerformanceMonitor(ruleEngine)
+
+	// 启动定期性能报告（每10分钟）
+	perfMonitor.StartPeriodicReporting(10 * time.Minute)
+
+	// 创建事件上下文管理器
+	eventContext := NewEventContext(nil) // 使用默认配置
+
+	// 创建告警管理器
+	alertManagerConfig := &AlertManagerConfig{
+		MaxActiveAlerts:      10000,
+		MaxHistoryAlerts:     50000,
+		AlertRetentionDays:   30,
+		EnableAggregation:    true,
+		AggregationWindow:    5 * time.Minute,
+		AggregationThreshold: 5,
+		EnableAutoResolve:    true,
+		AutoResolveTimeout:   24 * time.Hour,
+		EnableNotifications:  true,
+		NotificationDelay:    30 * time.Second,
+		PersistAlerts:        true,
+		AlertStoragePath:     "data/alerts",
+	}
+	alertManager := NewAlertManager(alertManagerConfig)
+
+	// 注册额外的告警处理器
+	alertManager.RegisterProcessor(NewAttackChainProcessor())
+	alertManager.RegisterProcessor(NewThreatIntelProcessor())
+
+	// 注册额外的通知渠道
+	alertManager.RegisterNotificationChannel(&ConsoleNotificationChannel{EnableColors: true})
+	alertManager.RegisterNotificationChannel(&WebhookNotificationChannel{
+		URL:     "http://localhost:8080/webhook/alerts",
+		Method:  "POST",
+		Headers: map[string]string{"Content-Type": "application/json"},
+		Timeout: 10 * time.Second,
+	})
+
+	// 初始化告警管理API服务器
+	alertAPI := NewAlertAPI(alertManager, 8888)
+	go func() {
+		log.Println("✓ 告警管理API服务器启动在端口 8888")
+		log.Println("  Web界面: http://localhost:8888")
+		log.Println("  API文档: http://localhost:8888/api/alerts")
+		if err := alertAPI.Start(); err != nil && err != http.ErrServerClosed {
+			log.Printf("告警API服务器错误: %v", err)
+		}
+	}()
+
+	// 加载安全配置到增强规则引擎
+	if err := loadEnhancedSecurityConfig(*configPath, ruleEngine); err != nil {
+		log.Printf("Warning: Failed to load enhanced security config: %v", err)
+		// 使用默认配置
+		ruleEngine.GlobalConfig = EnhancedGlobalConfig{
+			EnableFileEvents:       true,
+			EnableNetworkEvents:    true,
+			EnableProcessEvents:    true,
+			EnablePermissionEvents: true,
+			EnableMemoryEvents:     true,
+			MinUIDFilter:           1000,
+			MaxUIDFilter:           65535,
+			MaxEventsPerSecond:     10000,
+			AlertThrottleSeconds:   60,
+			MaxAlertHistory:        1000,
+			EnableRuleStats:        true,
+			LogLevel:               "info",
+		}
+	}
+
+	// 编译规则以提升性能
+	if err := ruleEngine.CompileRules(); err != nil {
+		log.Printf("Warning: Failed to compile rules: %v", err)
 	}
 
 	// 加载eBPF程序
@@ -503,13 +639,13 @@ func main() {
 	configMap := coll.Maps["etracee_config"]
 	if configMap != nil {
 		// 设置事件类型开关
-		configMap.Put(uint32(0), uint64(boolToUint64(config.Global.EnableFileEvents)))
-		configMap.Put(uint32(1), uint64(boolToUint64(config.Global.EnableNetworkEvents)))
-		configMap.Put(uint32(2), uint64(boolToUint64(config.Global.EnableProcessEvents)))
-		configMap.Put(uint32(3), uint64(boolToUint64(config.Global.EnablePermissionEvents)))
-		configMap.Put(uint32(4), uint64(boolToUint64(config.Global.EnableMemoryEvents)))
-		configMap.Put(uint32(5), uint64(config.Global.MinUIDFilter))
-		configMap.Put(uint32(6), uint64(config.Global.MaxUIDFilter))
+		configMap.Put(uint32(0), uint64(boolToUint64(ruleEngine.GlobalConfig.EnableFileEvents)))
+		configMap.Put(uint32(1), uint64(boolToUint64(ruleEngine.GlobalConfig.EnableNetworkEvents)))
+		configMap.Put(uint32(2), uint64(boolToUint64(ruleEngine.GlobalConfig.EnableProcessEvents)))
+		configMap.Put(uint32(3), uint64(boolToUint64(ruleEngine.GlobalConfig.EnablePermissionEvents)))
+		configMap.Put(uint32(4), uint64(boolToUint64(ruleEngine.GlobalConfig.EnableMemoryEvents)))
+		configMap.Put(uint32(5), uint64(ruleEngine.GlobalConfig.MinUIDFilter))
+		configMap.Put(uint32(6), uint64(ruleEngine.GlobalConfig.MaxUIDFilter))
 	}
 
 	// 附加到 execve 系统调用跟踪点
@@ -647,10 +783,13 @@ func main() {
 			return
 
 		case record := <-eventChan:
+			eventStartTime := time.Now()
+
 			// 解析事件
 			var rawEvent RawEvent
 			if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &rawEvent); err != nil {
 				log.Printf("解析事件数据时出错: %v", err)
+				perfMonitor.RecordError("event_parsing")
 				continue
 			}
 
@@ -674,8 +813,70 @@ func main() {
 				continue
 			}
 
-			// 应用安全规则
-			matchSecurityRules(event, config)
+			// 应用增强安全规则引擎
+			alerts := ruleEngine.MatchRules(event)
+
+			// 更新事件上下文（用于攻击链重建）
+			eventContext.UpdateProcessContext(event)
+
+			// 根据事件类型更新相应的上下文
+			switch event.EventType {
+			case "connect", "bind", "listen", "accept", "sendto", "recvfrom":
+				eventContext.UpdateNetworkContext(event)
+			case "openat", "close", "read", "write", "unlink", "rename", "chmod", "chown":
+				if event.Filename != "" {
+					eventContext.UpdateFileContext(event)
+				}
+			}
+
+			// 处理告警事件并检测攻击链
+			for _, alert := range alerts {
+				// 创建AlertEvent结构体
+				alertEvent := &AlertEvent{
+					RuleName:    alert.RuleName,
+					Description: alert.Description,
+					Severity:    alert.Severity,
+					Category:    alert.Category,
+					Timestamp:   time.Now(),
+				}
+				
+				// 检测攻击链
+				eventContext.DetectAttackChain(event, alertEvent)
+			}
+
+			// 获取并显示攻击链
+			if attackChains := eventContext.GetAttackChains(); len(attackChains) > 0 {
+				for _, chain := range attackChains {
+					log.Printf("🔗 检测到攻击链: ID=%s, 阶段=%s, 风险级别=%s, 技术数量=%d",
+						chain.ID, chain.CurrentStage, chain.RiskLevel, len(chain.Techniques))
+				}
+			}
+
+			// 记录事件处理性能
+			eventProcessingTime := time.Since(eventStartTime)
+			perfMonitor.RecordEvent(eventProcessingTime)
+
+			// 处理告警事件
+			for _, alert := range alerts {
+				// 更新事件的告警信息
+				event.Severity = alert.Severity
+				event.RuleMatched = alert.RuleName
+
+				// 记录告警性能
+				perfMonitor.RecordAlert(alert.RuleName, eventProcessingTime)
+
+				// 使用告警管理器处理告警
+				managedAlert, err := alertManager.ProcessAlert(alert)
+				if err != nil {
+					log.Printf("告警处理失败: %v", err)
+					perfMonitor.RecordError("alert_processing")
+					continue
+				}
+
+				// 记录详细的告警信息
+				log.Printf("🚨 安全告警已处理: ID=%s, 规则=%s, 严重级别=%s, 状态=%s",
+					managedAlert.ID, managedAlert.RuleName, managedAlert.Severity, managedAlert.Status)
+			}
 
 			// 更新Dashboard统计（如果启用）
 			if dashboardInstance != nil {

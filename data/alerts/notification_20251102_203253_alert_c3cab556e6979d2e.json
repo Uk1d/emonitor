@@ -1,0 +1,22 @@
+{
+  "actions": [
+    "log_alert",
+    "send_notification",
+    "block_process"
+  ],
+  "alert_id": "alert_c3cab556e6979d2e",
+  "category": "security",
+  "created_at": "2025-11-02T20:32:53.490460256+08:00",
+  "description": "增强可疑二进制执行检测",
+  "event": {
+    "comm": "tty",
+    "filename": "",
+    "pid": 9087,
+    "uid": 1000
+  },
+  "mitre_attack": null,
+  "rule_name": "suspicious_binary_execution_enhanced",
+  "severity": "high",
+  "status": "new",
+  "timestamp": "2025-11-02 20:33:23"
+}
