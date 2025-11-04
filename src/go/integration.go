@@ -59,7 +59,7 @@ func (it *IntegrationTest) RunIntegrationTests() error {
 		result := test()
 		it.testResults = append(it.testResults, result)
 
-		status := "✓ PASS"
+    status := "[+] PASS"
 		if !result.Passed {
 			status = "✗ FAIL"
 		}
@@ -373,7 +373,7 @@ func (it *IntegrationTest) testAPIServerIntegration() IntegrationTestResult {
 	}
 
 	// 启动API服务器
-	alertAPI := NewAlertAPI(it.alertManager, 8889)
+    alertAPI := NewAlertAPI(it.alertManager, 8889, nil)
 	go func() {
 		if err := alertAPI.Start(); err != nil {
 			log.Printf("API服务器启动失败: %v", err)
@@ -575,7 +575,7 @@ func (it *IntegrationTest) generateHTMLReport(data map[string]interface{}, filen
 		data["failed_tests"])
 
 	for _, result := range it.testResults {
-		status := `<span class="pass">✓ PASS</span>`
+    status := `<span class="pass">[+] PASS</span>`
 		if !result.Passed {
 			status = `<span class="fail">✗ FAIL</span>`
 		}

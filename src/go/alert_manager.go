@@ -15,24 +15,27 @@ import (
 
 // AlertManager 告警管理器
 type AlertManager struct {
-	// 告警存储
-	activeAlerts    map[string]*ManagedAlert
-	alertHistory    []ManagedAlert
-	
-	// 告警配置
-	config          *AlertManagerConfig
-	
-	// 告警处理器
-	processors      map[string]AlertProcessor
-	
-	// 统计信息
-	stats           *AlertStats
-	
-	// 同步控制
-	mutex           sync.RWMutex
-	
-	// 通知渠道
-	notificationChannels map[string]NotificationChannel
+    // 告警存储
+    activeAlerts    map[string]*ManagedAlert
+    alertHistory    []ManagedAlert
+
+    // 告警配置
+    config          *AlertManagerConfig
+
+    // 告警处理器
+    processors      map[string]AlertProcessor
+
+    // 统计信息
+    stats           *AlertStats
+
+    // 同步控制
+    mutex           sync.RWMutex
+
+    // 通知渠道
+    notificationChannels map[string]NotificationChannel
+
+    // 外部存储（可选）
+    storage         Storage
 }
 
 // ManagedAlert 管理的告警
@@ -183,6 +186,11 @@ func NewAlertManager(config *AlertManagerConfig) *AlertManager {
 	return am
 }
 
+// SetStorage 注入外部存储
+func (am *AlertManager) SetStorage(storage Storage) {
+    am.storage = storage
+}
+
 // ProcessAlert 处理告警事件
 func (am *AlertManager) ProcessAlert(alertEvent AlertEvent) (*ManagedAlert, error) {
 	am.mutex.Lock()
@@ -239,8 +247,8 @@ func (am *AlertManager) ProcessAlert(alertEvent AlertEvent) (*ManagedAlert, erro
 
 // AcknowledgeAlert 确认告警
 func (am *AlertManager) AcknowledgeAlert(alertID, acknowledgedBy string) error {
-	am.mutex.Lock()
-	defer am.mutex.Unlock()
+    am.mutex.Lock()
+    defer am.mutex.Unlock()
 
 	alert, exists := am.activeAlerts[alertID]
 	if !exists {
@@ -251,16 +259,19 @@ func (am *AlertManager) AcknowledgeAlert(alertID, acknowledgedBy string) error {
 	alert.Status = AlertStatusAcknowledged
 	alert.AcknowledgedAt = &now
 	alert.UpdatedAt = now
-	alert.AssignedTo = acknowledgedBy
+    alert.AssignedTo = acknowledgedBy
 
-	log.Printf("告警已确认: ID=%s, 确认人=%s", alertID, acknowledgedBy)
-	return nil
+    // 持久化最新状态（acknowledged），确保统计与列表一致
+    go am.persistAlert(alert)
+
+    log.Printf("告警已确认: ID=%s, 确认人=%s", alertID, acknowledgedBy)
+    return nil
 }
 
 // ResolveAlert 解决告警
 func (am *AlertManager) ResolveAlert(alertID, resolvedBy, notes string) error {
-	am.mutex.Lock()
-	defer am.mutex.Unlock()
+    am.mutex.Lock()
+    defer am.mutex.Unlock()
 
 	alert, exists := am.activeAlerts[alertID]
 	if !exists {
@@ -271,16 +282,19 @@ func (am *AlertManager) ResolveAlert(alertID, resolvedBy, notes string) error {
 	alert.Status = AlertStatusResolved
 	alert.ResolvedAt = &now
 	alert.UpdatedAt = now
-	alert.AssignedTo = resolvedBy
+    alert.AssignedTo = resolvedBy
 
-	if notes != "" {
-		alert.ProcessingNotes = append(alert.ProcessingNotes, 
-			fmt.Sprintf("[%s] %s: %s", now.Format("2006-01-02 15:04:05"), resolvedBy, notes))
-	}
+    if notes != "" {
+        alert.ProcessingNotes = append(alert.ProcessingNotes, 
+            fmt.Sprintf("[%s] %s: %s", now.Format("2006-01-02 15:04:05"), resolvedBy, notes))
+    }
 
-	// 移动到历史记录
-	am.alertHistory = append(am.alertHistory, *alert)
-	delete(am.activeAlerts, alertID)
+    // 持久化最新状态（resolved）
+    go am.persistAlert(alert)
+
+    // 移动到历史记录
+    am.alertHistory = append(am.alertHistory, *alert)
+    delete(am.activeAlerts, alertID)
 
 	// 更新统计
 	am.stats.ResolvedAlerts++
@@ -455,9 +469,15 @@ func generateAlertID() string {
 }
 
 func (am *AlertManager) persistAlert(alert *ManagedAlert) {
-	if am.config.AlertStoragePath == "" {
-		return
-	}
+    // 同步写入外部存储（如可用）
+    if am.storage != nil {
+        if err := am.storage.SaveAlert(alert); err != nil {
+            log.Printf("保存告警到存储失败: %v", err)
+        }
+    }
+    if am.config.AlertStoragePath == "" {
+        return
+    }
 
 	// 确保目录存在
 	if err := os.MkdirAll(am.config.AlertStoragePath, 0755); err != nil {
@@ -563,28 +583,31 @@ func (am *AlertManager) cleanupExpiredAlerts() {
 }
 
 func (am *AlertManager) autoResolveTimeoutAlerts() {
-	am.mutex.Lock()
-	defer am.mutex.Unlock()
+    am.mutex.Lock()
+    defer am.mutex.Unlock()
 
 	cutoffTime := time.Now().Add(-am.config.AutoResolveTimeout)
 	resolvedCount := 0
 	
 	for id, alert := range am.activeAlerts {
-		if alert.CreatedAt.Before(cutoffTime) && alert.Status == AlertStatusNew {
-			now := time.Now()
-			alert.Status = AlertStatusResolved
-			alert.ResolvedAt = &now
-			alert.UpdatedAt = now
-			alert.ProcessingNotes = append(alert.ProcessingNotes, 
-				fmt.Sprintf("[%s] 系统: 自动解决超时告警", now.Format("2006-01-02 15:04:05")))
-			
-			// 移动到历史记录
-			am.alertHistory = append(am.alertHistory, *alert)
-			delete(am.activeAlerts, id)
-			
-			resolvedCount++
-		}
-	}
+        if alert.CreatedAt.Before(cutoffTime) && alert.Status == AlertStatusNew {
+            now := time.Now()
+            alert.Status = AlertStatusResolved
+            alert.ResolvedAt = &now
+            alert.UpdatedAt = now
+            alert.ProcessingNotes = append(alert.ProcessingNotes, 
+                fmt.Sprintf("[%s] 系统: 自动解决超时告警", now.Format("2006-01-02 15:04:05")))
+            
+            // 持久化最新状态（resolved）
+            go am.persistAlert(alert)
+
+            // 移动到历史记录
+            am.alertHistory = append(am.alertHistory, *alert)
+            delete(am.activeAlerts, id)
+            
+            resolvedCount++
+        }
+    }
 	
 	if resolvedCount > 0 {
 		log.Printf("自动解决了 %d 个超时告警", resolvedCount)

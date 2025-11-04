@@ -12,25 +12,28 @@ import (
 
 // AlertAPI 告警API服务器
 type AlertAPI struct {
-	alertManager *AlertManager
-	server       *http.Server
+    alertManager *AlertManager
+    server       *http.Server
+    storage      Storage
 }
 
 // NewAlertAPI 创建告警API服务器
-func NewAlertAPI(alertManager *AlertManager, port int) *AlertAPI {
-	api := &AlertAPI{
-		alertManager: alertManager,
-	}
+func NewAlertAPI(alertManager *AlertManager, port int, storage Storage) *AlertAPI {
+    api := &AlertAPI{
+        alertManager: alertManager,
+        storage:      storage,
+    }
 
 	mux := http.NewServeMux()
 	
 	// 注册API路由
 	mux.HandleFunc("/api/alerts", api.handleAlerts)
 	mux.HandleFunc("/api/alerts/", api.handleAlertDetail)
-	mux.HandleFunc("/api/alerts/stats", api.handleAlertStats)
-	mux.HandleFunc("/api/alerts/acknowledge", api.handleAcknowledgeAlert)
-	mux.HandleFunc("/api/alerts/resolve", api.handleResolveAlert)
-	mux.HandleFunc("/api/attack-chains", api.handleAttackChains)
+    mux.HandleFunc("/api/alerts/stats", api.handleAlertStats)
+    mux.HandleFunc("/api/alerts/acknowledge", api.handleAcknowledgeAlert)
+    mux.HandleFunc("/api/alerts/resolve", api.handleResolveAlert)
+    mux.HandleFunc("/api/attack-chains", api.handleAttackChains)
+    mux.HandleFunc("/api/events", api.handleEvents)
 	
 	// 静态文件服务（用于Web界面）
 	mux.HandleFunc("/", api.handleWebInterface)
@@ -82,67 +85,83 @@ func (api *AlertAPI) handleAlerts(w http.ResponseWriter, r *http.Request) {
 
 // 获取告警列表
 func (api *AlertAPI) getAlerts(w http.ResponseWriter, r *http.Request) {
-	// 解析查询参数
-	filters := make(map[string]interface{})
-	
-	if severity := r.URL.Query().Get("severity"); severity != "" {
-		filters["severity"] = severity
-	}
-	
-	if category := r.URL.Query().Get("category"); category != "" {
-		filters["category"] = category
-	}
-	
-	if status := r.URL.Query().Get("status"); status != "" {
-		filters["status"] = status
-	}
-	
-	if ruleName := r.URL.Query().Get("rule_name"); ruleName != "" {
-		filters["rule_name"] = ruleName
-	}
+    // 解析查询参数
+    filters := make(map[string]interface{})
+    if severity := r.URL.Query().Get("severity"); severity != "" { filters["severity"] = severity }
+    if category := r.URL.Query().Get("category"); category != "" { filters["category"] = category }
+    if status := r.URL.Query().Get("status"); status != "" { filters["status"] = status }
+    if ruleName := r.URL.Query().Get("rule_name"); ruleName != "" { filters["rule_name"] = ruleName }
 
-	// 获取告警列表
-	alerts := api.alertManager.GetActiveAlerts(filters)
-	
-	// 分页处理
-	page := 1
-	pageSize := 50
-	
-	if p := r.URL.Query().Get("page"); p != "" {
-		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
-			page = parsed
-		}
-	}
-	
-	if ps := r.URL.Query().Get("page_size"); ps != "" {
-		if parsed, err := strconv.Atoi(ps); err == nil && parsed > 0 && parsed <= 1000 {
-			pageSize = parsed
-		}
-	}
-	
-	start := (page - 1) * pageSize
-	end := start + pageSize
-	
-	if start >= len(alerts) {
-		alerts = []*ManagedAlert{}
-	} else {
-		if end > len(alerts) {
-			end = len(alerts)
-		}
-		alerts = alerts[start:end]
-	}
+    page := 1
+    pageSize := 50
+    if p := r.URL.Query().Get("page"); p != "" { if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 { page = parsed } }
+    if ps := r.URL.Query().Get("page_size"); ps != "" { if parsed, err := strconv.Atoi(ps); err == nil && parsed > 0 && parsed <= 1000 { pageSize = parsed } }
 
-	// 构建响应
-	response := map[string]interface{}{
-		"alerts":     alerts,
-		"page":       page,
-		"page_size":  pageSize,
-		"total":      len(api.alertManager.GetActiveAlerts(nil)),
-		"timestamp":  time.Now().Format(time.RFC3339),
-	}
+    var alerts []*ManagedAlert
+    total := 0
+    if api.storage != nil {
+        res, cnt, err := api.storage.QueryAlerts(filters, page, pageSize)
+        if err != nil {
+            log.Printf("查询存储告警失败: %v", err)
+            alerts = api.alertManager.GetActiveAlerts(filters)
+            total = len(api.alertManager.GetActiveAlerts(nil))
+        } else {
+            alerts = res
+            total = cnt
+        }
+    } else {
+        alerts = api.alertManager.GetActiveAlerts(filters)
+        total = len(api.alertManager.GetActiveAlerts(nil))
+    }
+
+    response := map[string]interface{}{
+        "alerts":     alerts,
+        "page":       page,
+        "page_size":  pageSize,
+        "total":      total,
+        "timestamp":  time.Now().Format(time.RFC3339),
+    }
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// 处理事件查询
+func (api *AlertAPI) handleEvents(w http.ResponseWriter, r *http.Request) {
+    if r.Method != "GET" {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+    if api.storage == nil {
+        http.Error(w, "Storage not configured", http.StatusServiceUnavailable)
+        return
+    }
+    filters := make(map[string]interface{})
+    if et := r.URL.Query().Get("event_type"); et != "" { filters["event_type"] = et }
+    if pidStr := r.URL.Query().Get("pid"); pidStr != "" { if v, err := strconv.Atoi(pidStr); err == nil { filters["pid"] = v } }
+    if uidStr := r.URL.Query().Get("uid"); uidStr != "" { if v, err := strconv.Atoi(uidStr); err == nil { filters["uid"] = v } }
+    if since := r.URL.Query().Get("since"); since != "" { filters["since"] = since }
+    if until := r.URL.Query().Get("until"); until != "" { filters["until"] = until }
+
+    page := 1
+    pageSize := 50
+    if p := r.URL.Query().Get("page"); p != "" { if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 { page = parsed } }
+    if ps := r.URL.Query().Get("page_size"); ps != "" { if parsed, err := strconv.Atoi(ps); err == nil && parsed > 0 && parsed <= 1000 { pageSize = parsed } }
+
+    events, total, err := api.storage.QueryEvents(filters, page, pageSize)
+    if err != nil {
+        http.Error(w, fmt.Sprintf("query events failed: %v", err), http.StatusInternalServerError)
+        return
+    }
+    response := map[string]interface{}{
+        "events":     events,
+        "page":       page,
+        "page_size":  pageSize,
+        "total":      total,
+        "timestamp":  time.Now().Format(time.RFC3339),
+    }
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(response)
 }
 
 // 处理告警详情请求
@@ -181,15 +200,46 @@ func (api *AlertAPI) getAlertDetail(w http.ResponseWriter, r *http.Request, aler
 
 // 处理告警统计请求
 func (api *AlertAPI) handleAlertStats(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+    if r.Method != "GET" {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
 
-	stats := api.alertManager.GetAlertStats()
-	
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stats)
+    stats := api.alertManager.GetAlertStats()
+
+    // 当配置了持久化存储时，使用存储中的数据计算统计，避免重启后内存为空导致统计为0
+    if api.storage != nil {
+        // 计算活跃告警：new、acknowledged、in_progress
+        activeStatuses := []string{string(AlertStatusNew), string(AlertStatusAcknowledged), string(AlertStatusInProgress)}
+        activeTotal := 0
+        for _, st := range activeStatuses {
+            _, cnt, err := api.storage.QueryAlerts(map[string]interface{}{"status": st}, 1, 1)
+            if err != nil {
+                log.Printf("统计活跃告警失败(status=%s): %v", st, err)
+                continue
+            }
+            activeTotal += cnt
+        }
+
+        // 计算已解决告警
+        if _, cnt, err := api.storage.QueryAlerts(map[string]interface{}{"status": string(AlertStatusResolved)}, 1, 1); err == nil {
+            stats.ResolvedAlerts = uint64(cnt)
+        } else {
+            log.Printf("统计已解决告警失败: %v", err)
+        }
+
+        // 计算误报告警
+        if _, cnt, err := api.storage.QueryAlerts(map[string]interface{}{"status": string(AlertStatusFalsePositive)}, 1, 1); err == nil {
+            stats.FalsePositives = uint64(cnt)
+        } else {
+            log.Printf("统计误报告警失败: %v", err)
+        }
+
+        stats.ActiveAlerts = uint64(activeTotal)
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(stats)
 }
 
 // 处理确认告警请求
@@ -317,7 +367,7 @@ func (api *AlertAPI) handleWebInterface(w http.ResponseWriter, r *http.Request) 
 </head>
 <body>
     <div class="header">
-        <h1>🚨 eTracee 告警管理系统</h1>
+            <h1>eTracee 告警管理系统</h1>
         <p>实时安全事件监控与告警管理平台</p>
     </div>
 
@@ -367,7 +417,7 @@ func (api *AlertAPI) handleWebInterface(w http.ResponseWriter, r *http.Request) 
             });
 
         // 加载告警列表
-        fetch('/api/alerts?page_size=10')
+        fetch('/api/alerts?page_size=10&status=new')
             .then(response => response.json())
             .then(data => {
                 const alertsList = document.getElementById('alerts-list');

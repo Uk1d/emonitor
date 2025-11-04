@@ -14,23 +14,23 @@ type LogNotificationChannel struct{}
 
 func (c *LogNotificationChannel) SendNotification(alert *ManagedAlert) error {
 	// 根据严重级别使用不同的日志格式
-	switch alert.Severity {
-	case "critical":
-		log.Printf("🚨 [CRITICAL] %s: %s (PID: %d, UID: %d)", 
-			alert.RuleName, alert.Description, alert.Event.PID, alert.Event.UID)
-	case "high":
-		log.Printf("⚠️  [HIGH] %s: %s (PID: %d, UID: %d)", 
-			alert.RuleName, alert.Description, alert.Event.PID, alert.Event.UID)
-	case "medium":
-		log.Printf("ℹ️  [MEDIUM] %s: %s (PID: %d, UID: %d)", 
-			alert.RuleName, alert.Description, alert.Event.PID, alert.Event.UID)
-	case "low":
-		log.Printf("📝 [LOW] %s: %s (PID: %d, UID: %d)", 
-			alert.RuleName, alert.Description, alert.Event.PID, alert.Event.UID)
-	default:
-		log.Printf("📋 [INFO] %s: %s (PID: %d, UID: %d)", 
-			alert.RuleName, alert.Description, alert.Event.PID, alert.Event.UID)
-	}
+    switch alert.Severity {
+    case "critical":
+        log.Printf("[!] [CRITICAL] %s: %s (PID: %d, UID: %d)", 
+            alert.RuleName, alert.Description, alert.Event.PID, alert.Event.UID)
+    case "high":
+        log.Printf("[!] [HIGH] %s: %s (PID: %d, UID: %d)", 
+            alert.RuleName, alert.Description, alert.Event.PID, alert.Event.UID)
+    case "medium":
+        log.Printf("[*] [MEDIUM] %s: %s (PID: %d, UID: %d)", 
+            alert.RuleName, alert.Description, alert.Event.PID, alert.Event.UID)
+    case "low":
+        log.Printf("[*] [LOW] %s: %s (PID: %d, UID: %d)", 
+            alert.RuleName, alert.Description, alert.Event.PID, alert.Event.UID)
+    default:
+        log.Printf("[*] [INFO] %s: %s (PID: %d, UID: %d)", 
+            alert.RuleName, alert.Description, alert.Event.PID, alert.Event.UID)
+    }
 	
 	return nil
 }
@@ -121,30 +121,24 @@ func (c *ConsoleNotificationChannel) SendNotification(alert *ManagedAlert) error
 		resetCode = "\033[0m"
 	}
 	
-	// 打印格式化的告警信息
-	fmt.Printf("%s╔══════════════════════════════════════════════════════════════════════════════════════╗%s\n", colorCode, resetCode)
-	fmt.Printf("%s║ 🚨 安全告警通知                                                                      ║%s\n", colorCode, resetCode)
-	fmt.Printf("%s╠══════════════════════════════════════════════════════════════════════════════════════╣%s\n", colorCode, resetCode)
-	fmt.Printf("%s║ 告警ID:     %-70s ║%s\n", colorCode, alert.ID, resetCode)
-	fmt.Printf("%s║ 规则名称:   %-70s ║%s\n", colorCode, alert.RuleName, resetCode)
-	fmt.Printf("%s║ 严重级别:   %-70s ║%s\n", colorCode, alert.Severity, resetCode)
-	fmt.Printf("%s║ 分类:       %-70s ║%s\n", colorCode, alert.Category, resetCode)
-	fmt.Printf("%s║ 描述:       %-70s ║%s\n", colorCode, alert.Description, resetCode)
-	fmt.Printf("%s║ 进程ID:     %-70d ║%s\n", colorCode, alert.Event.PID, resetCode)
-	fmt.Printf("%s║ 用户ID:     %-70d ║%s\n", colorCode, alert.Event.UID, resetCode)
-	fmt.Printf("%s║ 进程名:     %-70s ║%s\n", colorCode, alert.Event.Comm, resetCode)
-	
-	if alert.Event.Filename != "" {
-		fmt.Printf("%s║ 文件名:     %-70s ║%s\n", colorCode, alert.Event.Filename, resetCode)
-	}
-	
-	if alert.MitreAttack != nil {
-		fmt.Printf("%s║ MITRE技术:  %-70s ║%s\n", colorCode, alert.MitreAttack.TechniqueID, resetCode)
-		fmt.Printf("%s║ 战术:       %-70s ║%s\n", colorCode, alert.MitreAttack.Tactic, resetCode)
-	}
-	
-	fmt.Printf("%s║ 时间:       %-70s ║%s\n", colorCode, alert.CreatedAt.Format("2006-01-02 15:04:05"), resetCode)
-	fmt.Printf("%s╚══════════════════════════════════════════════════════════════════════════════════════╝%s\n", colorCode, resetCode)
+    // 打印格式化的告警信息（纯ASCII，无框线/emoji）
+    fmt.Printf("%s[!] 安全告警通知%s\n", colorCode, resetCode)
+    fmt.Printf("%s- 告警ID:     %s%s\n", colorCode, alert.ID, resetCode)
+    fmt.Printf("%s- 规则名称:   %s%s\n", colorCode, alert.RuleName, resetCode)
+    fmt.Printf("%s- 严重级别:   %s%s\n", colorCode, alert.Severity, resetCode)
+    fmt.Printf("%s- 分类:       %s%s\n", colorCode, alert.Category, resetCode)
+    fmt.Printf("%s- 描述:       %s%s\n", colorCode, alert.Description, resetCode)
+    fmt.Printf("%s- 进程ID:     %d%s\n", colorCode, alert.Event.PID, resetCode)
+    fmt.Printf("%s- 用户ID:     %d%s\n", colorCode, alert.Event.UID, resetCode)
+    fmt.Printf("%s- 进程名:     %s%s\n", colorCode, alert.Event.Comm, resetCode)
+    if alert.Event.Filename != "" {
+        fmt.Printf("%s- 文件名:     %s%s\n", colorCode, alert.Event.Filename, resetCode)
+    }
+    if alert.MitreAttack != nil {
+        fmt.Printf("%s- MITRE技术:  %s%s\n", colorCode, alert.MitreAttack.TechniqueID, resetCode)
+        fmt.Printf("%s- 战术:       %s%s\n", colorCode, alert.MitreAttack.Tactic, resetCode)
+    }
+    fmt.Printf("%s- 时间:       %s%s\n", colorCode, alert.CreatedAt.Format("2006-01-02 15:04:05"), resetCode)
 	
 	return nil
 }
@@ -206,8 +200,8 @@ eTracee 安全监控系统
 	)
 	
 	// 模拟邮件发送
-	log.Printf("📧 [模拟邮件发送] 收件人: %v, 主题: %s", c.ToAddresses, subject)
-	log.Printf("📧 [邮件内容预览] %s", body[:100]+"...")
+    log.Printf("[*] [模拟邮件发送] 收件人: %v, 主题: %s", c.ToAddresses, subject)
+    log.Printf("[*] [邮件内容预览] %s", body[:100]+"...")
 	
 	return nil
 }
@@ -293,7 +287,7 @@ func (c *SlackNotificationChannel) SendNotification(alert *ManagedAlert) error {
 		"attachments": []map[string]interface{}{
 			{
 				"color":      color,
-				"title":      fmt.Sprintf("🚨 安全告警: %s", alert.RuleName),
+    "title":      fmt.Sprintf("[!] 安全告警: %s", alert.RuleName),
 				"title_link": fmt.Sprintf("http://localhost:8080/alerts/%s", alert.ID),
 				"text":       alert.Description,
 				"fields": []map[string]interface{}{
@@ -433,7 +427,7 @@ INSERT INTO %s (
 		}(),
 	)
 	
-	log.Printf("🗄️  [模拟数据库插入] %s", insertSQL)
+    log.Printf("[+] [模拟数据库插入] %s", insertSQL)
 	
 	return nil
 }

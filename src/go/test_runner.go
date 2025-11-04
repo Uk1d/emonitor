@@ -214,7 +214,7 @@ func (tr *TestRunner) printDetailedResults(report *TestReport) {
 	fmt.Println(strings.Repeat("-", 80))
 
 	for _, result := range tr.framework.results {
-		status := "✓ PASS"
+    status := "[+] PASS"
 		if !result.Passed {
 			status = "✗ FAIL"
 		}

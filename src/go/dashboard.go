@@ -242,9 +242,9 @@ func (d *Dashboard) display() {
 	aggStats := d.GetAggregatedStats()
 
 	// 标题
-	fmt.Println("╔══════════════════════════════════════════════════════════════════════════════╗")
-	fmt.Println("║                            eTracee 实时监控仪表板                              ║")
-	fmt.Println("╚══════════════════════════════════════════════════════════════════════════════╝")
+    fmt.Println("==============================================================================")
+    fmt.Println("|                            eTracee 实时监控仪表板                           |")
+    fmt.Println("==============================================================================")
 	fmt.Println()
 
 	// 基础统计
@@ -262,29 +262,29 @@ func (d *Dashboard) display() {
 	d.displayTwoColumns(leftColumn, rightColumn)
 
 	// 安全告警（如果有）
-	if len(stats.SecurityAlerts) > 0 {
-		fmt.Println("\n🚨 最近安全告警:")
-		fmt.Println("┌─────────────────────────────────────────────────────────────────────────────┐")
+    if len(stats.SecurityAlerts) > 0 {
+        fmt.Println("\n[!] 最近安全告警:")
+        fmt.Println("+---------------------------------------------------------------------------+")
 		for i, alert := range stats.SecurityAlerts {
 			if i >= 5 {
 				break
 			}
 			severity := alert.Severity
-			if severity == "high" {
-				severity = "🔴 高"
-			} else if severity == "medium" {
-				severity = "🟡 中"
-			} else {
-				severity = "🟢 低"
-			}
-			fmt.Printf("│ %s %s | %s | PID:%d | %s\n",
-				alert.Timestamp.Format("15:04:05"),
-				severity,
-				truncateString(alert.RuleMatched, 20),
-				alert.PID,
-				truncateString(alert.Comm, 15))
+            if severity == "high" {
+                severity = "[!] 高"
+            } else if severity == "medium" {
+                severity = "[*] 中"
+            } else {
+                severity = "[+] 低"
+            }
+            fmt.Printf("| %s %s | %s | PID:%d | %s\n",
+                alert.Timestamp.Format("15:04:05"),
+                severity,
+                truncateString(alert.RuleMatched, 20),
+                alert.PID,
+                truncateString(alert.Comm, 15))
 		}
-		fmt.Println("└─────────────────────────────────────────────────────────────────────────────┘")
+        fmt.Println("+---------------------------------------------------------------------------+")
 	}
 
 	fmt.Println("\n按 Ctrl+C 退出仪表板模式")
@@ -295,25 +295,25 @@ func (d *Dashboard) generateLeftColumn(stats DashboardStats, aggStats Aggregated
 	var lines []string
 
 	// Top进程
-	lines = append(lines, "📊 Top 进程 (按事件数)")
-	lines = append(lines, "┌─────────────────────────────────────┐")
+    lines = append(lines, "[*] Top 进程 (按事件数)")
+    lines = append(lines, "+-------------------------------------+")
 	for i, proc := range stats.TopProcesses {
 		if i >= 8 {
 			break
 		}
-		lines = append(lines, fmt.Sprintf("│ %-15s %6d %8d │",
-			truncateString(proc.Comm, 15), proc.PID, proc.Count))
+        lines = append(lines, fmt.Sprintf("| %-15s %6d %8d |",
+            truncateString(proc.Comm, 15), proc.PID, proc.Count))
 	}
 	for len(lines) < 11 {
-		lines = append(lines, "│                                     │")
+        lines = append(lines, "|                                     |")
 	}
-	lines = append(lines, "└─────────────────────────────────────┘")
+    lines = append(lines, "+-------------------------------------+")
 
 	lines = append(lines, "")
 
 	// 事件类型分布
-	lines = append(lines, "📈 事件类型分布")
-	lines = append(lines, "┌─────────────────────────────────────┐")
+    lines = append(lines, "[*] 事件类型分布")
+    lines = append(lines, "+-------------------------------------+")
 
 	// 按数量排序事件类型
 	type eventTypeCount struct {
@@ -333,13 +333,13 @@ func (d *Dashboard) generateLeftColumn(stats DashboardStats, aggStats Aggregated
 			break
 		}
 		percentage := float64(et.count) / float64(stats.TotalEvents) * 100
-		lines = append(lines, fmt.Sprintf("│ %-20s %6d %5.1f%% │",
-			truncateString(et.eventType, 20), et.count, percentage))
+        lines = append(lines, fmt.Sprintf("| %-20s %6d %5.1f%% |",
+            truncateString(et.eventType, 20), et.count, percentage))
 	}
 	for len(lines) < 23 {
-		lines = append(lines, "│                                     │")
+    lines = append(lines, "|                                     |")
 	}
-	lines = append(lines, "└─────────────────────────────────────┘")
+	lines = append(lines, "+-------------------------------------+")
 
 	return lines
 }
@@ -349,54 +349,54 @@ func (d *Dashboard) generateRightColumn(stats DashboardStats, aggStats Aggregate
 	var lines []string
 
 	// Top系统调用
-	lines = append(lines, "🔧 Top 系统调用")
-	lines = append(lines, "┌─────────────────────────────────────┐")
+    lines = append(lines, "[*] Top 系统调用")
+    lines = append(lines, "+-------------------------------------+")
 	for i, syscall := range stats.TopSyscalls {
 		if i >= 8 {
 			break
 		}
-		lines = append(lines, fmt.Sprintf("│ %-20s %10d │",
-			truncateString(syscall.Name, 20), syscall.Count))
+        lines = append(lines, fmt.Sprintf("| %-20s %10d |",
+            truncateString(syscall.Name, 20), syscall.Count))
 	}
 	for len(lines) < 11 {
-		lines = append(lines, "│                                     │")
+        lines = append(lines, "|                                     |")
 	}
-	lines = append(lines, "└─────────────────────────────────────┘")
+    lines = append(lines, "+-------------------------------------+")
 
 	lines = append(lines, "")
 
 	// 最近事件
-	lines = append(lines, "⏰ 最近事件")
-	lines = append(lines, "┌─────────────────────────────────────┐")
+    lines = append(lines, "[*] 最近事件")
+    lines = append(lines, "+-------------------------------------+")
 	for i, event := range stats.RecentEvents {
 		if i >= 8 {
 			break
 		}
 		severity := ""
 		if event.Severity != "" {
-			if event.Severity == "high" {
-				severity = "🔴"
-			} else if event.Severity == "medium" {
-				severity = "🟡"
-			} else {
-				severity = "🟢"
-			}
+            if event.Severity == "high" {
+                severity = "[!]"
+            } else if event.Severity == "medium" {
+                severity = "[*]"
+            } else {
+                severity = "[+]"
+            }
 		}
 		timestamp := ""
 		if len(event.Timestamp) >= 8 {
 			timestamp = event.Timestamp[11:19] // 提取时间部分
 		}
-		lines = append(lines, fmt.Sprintf("│%s %s %s %6d %-10s │",
-			severity,
-			timestamp,
-			truncateString(event.EventType, 12),
-			event.PID,
-			truncateString(event.Comm, 10)))
+        lines = append(lines, fmt.Sprintf("|%s %s %s %6d %-10s |",
+            severity,
+            timestamp,
+            truncateString(event.EventType, 12),
+            event.PID,
+            truncateString(event.Comm, 10)))
 	}
 	for len(lines) < 23 {
-		lines = append(lines, "│                                     │")
+        lines = append(lines, "|                                     |")
 	}
-	lines = append(lines, "└─────────────────────────────────────┘")
+    lines = append(lines, "+-------------------------------------+")
 
 	return lines
 }

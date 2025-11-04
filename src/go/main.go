@@ -433,7 +433,7 @@ func loadEnhancedSecurityConfig(configPath string, ruleEngine *EnhancedRuleEngin
 	// 加载检测规则
 	ruleEngine.Rules = make(map[string][]EnhancedDetectionRule)
 	log.Printf("开始加载检测规则，发现 %d 个类别", len(config.DetectionRules))
-	
+
 	totalRules := 0
 	for category, rules := range config.DetectionRules {
 		log.Printf("加载类别 '%s': %d 条规则", category, len(rules))
@@ -574,6 +574,20 @@ func main() {
 	}
 	alertManager := NewAlertManager(alertManagerConfig)
 
+	// 读取并初始化存储配置（Week 5）
+	storageCfg, _ := LoadStorageConfig("config/storage.yaml")
+	var storage Storage
+	if storageCfg != nil {
+		st, err := NewStorageFromConfig(storageCfg)
+		if err != nil {
+			log.Printf("初始化存储失败: %v", err)
+		} else {
+			storage = st
+			alertManager.SetStorage(storage)
+    log.Printf("[+] 存储后端已初始化: %s -> %s", storageCfg.Backend, storageCfg.SQLite.Path)
+		}
+	}
+
 	// 注册额外的告警处理器
 	alertManager.RegisterProcessor(NewAttackChainProcessor())
 	alertManager.RegisterProcessor(NewThreatIntelProcessor())
@@ -587,10 +601,10 @@ func main() {
 		Timeout: 10 * time.Second,
 	})
 
-	// 初始化告警管理API服务器
-	alertAPI := NewAlertAPI(alertManager, 8888)
+	// 初始化告警管理API服务器（接入存储查询）
+	alertAPI := NewAlertAPI(alertManager, 8888, storage)
 	go func() {
-		log.Println("✓ 告警管理API服务器启动在端口 8888")
+    log.Println("[+] 告警管理API服务器启动在端口 8888")
 		log.Println("  Web界面: http://localhost:8888")
 		log.Println("  API文档: http://localhost:8888/api/alerts")
 		if err := alertAPI.Start(); err != nil && err != http.ErrServerClosed {
@@ -687,15 +701,15 @@ func main() {
 	attachedCount := 0
 	if execLink != nil {
 		attachedCount++
-		log.Println("✓ execve 跟踪点已成功附加")
+    log.Println("[+] execve 跟踪点已成功附加")
 	}
 	if exitLink != nil {
 		attachedCount++
-		log.Println("✓ exit 跟踪点已成功附加")
+    log.Println("[+] exit 跟踪点已成功附加")
 	}
 	if netLink != nil {
 		attachedCount++
-		log.Println("✓ connect 跟踪点已成功附加")
+    log.Println("[+] connect 跟踪点已成功附加")
 	}
 
 	if attachedCount == 0 {
@@ -717,7 +731,7 @@ func main() {
 	if *dashboard {
 		dashboardInstance = NewDashboard()
 		go dashboardInstance.Start()
-		log.Println("✓ 命令行Dashboard已启动")
+    log.Println("[+] 命令行Dashboard已启动")
 	}
 
 	// 信号处理
@@ -839,7 +853,7 @@ func main() {
 					Category:    alert.Category,
 					Timestamp:   time.Now(),
 				}
-				
+
 				// 检测攻击链
 				eventContext.DetectAttackChain(event, alertEvent)
 			}
@@ -847,7 +861,7 @@ func main() {
 			// 获取并显示攻击链
 			if attackChains := eventContext.GetAttackChains(); len(attackChains) > 0 {
 				for _, chain := range attackChains {
-					log.Printf("🔗 检测到攻击链: ID=%s, 阶段=%s, 风险级别=%s, 技术数量=%d",
+    log.Printf("[*] 检测到攻击链: ID=%s, 阶段=%s, 风险级别=%s, 技术数量=%d",
 						chain.ID, chain.CurrentStage, chain.RiskLevel, len(chain.Techniques))
 				}
 			}
@@ -874,13 +888,18 @@ func main() {
 				}
 
 				// 记录详细的告警信息
-				log.Printf("🚨 安全告警已处理: ID=%s, 规则=%s, 严重级别=%s, 状态=%s",
+    log.Printf("[!] 安全告警已处理: ID=%s, 规则=%s, 严重级别=%s, 状态=%s",
 					managedAlert.ID, managedAlert.RuleName, managedAlert.Severity, managedAlert.Status)
 			}
 
 			// 更新Dashboard统计（如果启用）
 			if dashboardInstance != nil {
 				dashboardInstance.UpdateStats(event)
+			}
+
+			// 持久化事件到存储（如可用）
+			if storage != nil {
+				_ = storage.SaveEvent(event)
 			}
 
 			// 输出JSON

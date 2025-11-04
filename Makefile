@@ -44,14 +44,14 @@ check-env:
 	@which $(BPFTOOL) > /dev/null || (echo "错误: bpftool 未安装" && exit 1)
 	@which $(GO) > /dev/null || (echo "错误: Go 未安装" && exit 1)
 	@test -f /sys/kernel/btf/vmlinux || (echo "警告: 内核 BTF 支持未启用" && exit 1)
-	@echo "✓ 环境检查通过"
+	@echo "[+] 环境检查通过"
 
 # 创建目录结构
 .PHONY: setup-dirs
 setup-dirs:
 	@echo "创建目录结构..."
 	@mkdir -p $(BUILD_DIR) $(BIN_DIR) $(LOGS_DIR)
-	@echo "✓ 目录结构创建完成"
+	@echo "[+] 目录结构创建完成"
 
 # 生成 vmlinux.h
 .PHONY: vmlinux
@@ -60,7 +60,7 @@ vmlinux: $(VMLINUX_H)
 $(VMLINUX_H):
 	@echo "生成 vmlinux.h..."
 	@$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
-	@echo "✓ vmlinux.h 生成完成"
+	@echo "[+] vmlinux.h 生成完成"
 
 # 编译 eBPF 程序
 .PHONY: bpf
@@ -69,7 +69,7 @@ bpf: $(BPF_OBJECT)
 $(BPF_OBJECT): $(BPF_MAIN_SOURCE) $(VMLINUX_H)
 	@echo "编译 eBPF 程序..."
 	@$(CLANG) $(CLANG_FLAGS) -I$(BPF_SRC_DIR) -c $< -o $@
-	@echo "✓ eBPF 程序编译完成"
+	@echo "[+] eBPF 程序编译完成"
 
 # 编译 Go 程序
 .PHONY: go
@@ -79,14 +79,14 @@ $(GO_BINARY): $(GO_SRC_DIR)/*.go $(BPF_OBJECT)
 	@echo "编译 Go 程序..."
 	cd $(GO_SRC_DIR) && $(GO) mod tidy
 	cd $(GO_SRC_DIR) && $(GO) build $(GO_FLAGS) -o ../../$(GO_BINARY) .
-	@echo "✓ Go 程序编译完成"
+	@echo "[+] Go 程序编译完成"
 
 # 安装依赖
 .PHONY: deps
 deps:
 	@echo "安装 Go 依赖..."
 	cd $(GO_SRC_DIR) && $(GO) mod download
-	@echo "✓ 依赖安装完成"
+	@echo "[+] 依赖安装完成"
 
 # 运行程序
 .PHONY: run
@@ -104,7 +104,7 @@ test-bpftrace:
 test: $(GO_BINARY)
 	@echo "运行功能测试..."
 	@cd $(shell pwd) && timeout 30s sudo $(GO_BINARY) || true
-	@echo "✓ 测试完成"
+	@echo "[+] 测试完成"
 
 # 安装系统
 .PHONY: install
@@ -114,7 +114,7 @@ install: all
 	@sudo mkdir -p /etc/etracee
 	@sudo cp $(CONFIG_DIR)/security_rules.yaml /etc/etracee/
 	@sudo mkdir -p /var/log/etracee
-	@echo "✓ 安装完成"
+	@echo "[+] 安装完成"
 
 # 卸载系统
 .PHONY: uninstall
@@ -122,7 +122,7 @@ uninstall:
 	@echo "卸载 eTracee..."
 	@sudo rm -f /usr/local/bin/etracee
 	@sudo rm -rf /etc/etracee
-	@echo "✓ 卸载完成"
+	@echo "[+] 卸载完成"
 
 # 打包发布
 .PHONY: package
@@ -131,7 +131,7 @@ package: all
 	@mkdir -p $(BUILD_DIR)/package/etracee-$(VERSION)
 	@cp -r $(BIN_DIR) $(CONFIG_DIR) $(SCRIPTS_DIR) README.md $(BUILD_DIR)/package/etracee-$(VERSION)/
 	@cd $(BUILD_DIR)/package && tar -czf etracee-$(VERSION).tar.gz etracee-$(VERSION)
-	@echo "✓ 打包完成: $(BUILD_DIR)/package/etracee-$(VERSION).tar.gz"
+	@echo "[+] 打包完成: $(BUILD_DIR)/package/etracee-$(VERSION).tar.gz"
 
 # 性能测试
 .PHONY: benchmark
@@ -141,7 +141,7 @@ benchmark: $(GO_BINARY)
 	@sleep 5
 	@echo "生成测试负载..."
 	@for i in {1..100}; do ls /tmp > /dev/null; done
-	@echo "✓ 性能测试完成"
+	@echo "[+] 性能测试完成"
 
 # 代码检查
 .PHONY: lint
@@ -149,7 +149,7 @@ lint:
 	@echo "检查 Go 代码..."
 	cd $(GO_SRC_DIR) && $(GO) vet ./...
 	cd $(GO_SRC_DIR) && $(GO) fmt ./...
-	@echo "✓ 代码检查完成"
+	@echo "[+] 代码检查完成"
 
 # 清理构建产物
 .PHONY: clean
@@ -158,14 +158,14 @@ clean:
 	@rm -rf $(BUILD_DIR)/* $(BIN_DIR)/* $(LOGS_DIR)/*
 	@rm -f $(VMLINUX_H)
 	cd $(GO_SRC_DIR) && $(GO) clean
-	@echo "✓ 清理完成"
+	@echo "[+] 清理完成"
 
 # 深度清理
 .PHONY: distclean
 distclean: clean
 	@echo "深度清理..."
 	cd $(GO_SRC_DIR) && rm -f go.sum
-	@echo "✓ 深度清理完成"
+	@echo "[+] 深度清理完成"
 
 # 显示帮助信息
 .PHONY: help

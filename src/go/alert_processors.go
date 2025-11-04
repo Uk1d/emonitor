@@ -45,7 +45,7 @@ func (p *SeverityBasedProcessor) ProcessAlert(alert *ManagedAlert) error {
 		alert.ProcessingNotes = append(alert.ProcessingNotes, note)
 		
 		// 记录关键事件
-		log.Printf("🚨 关键安全告警: %s - %s", alert.RuleName, alert.Description)
+    log.Printf("[!] 关键安全告警: %s - %s", alert.RuleName, alert.Description)
 		
 	case "high":
 		// 高危告警需要关注
@@ -53,7 +53,7 @@ func (p *SeverityBasedProcessor) ProcessAlert(alert *ManagedAlert) error {
 			time.Now().Format("2006-01-02 15:04:05"))
 		alert.ProcessingNotes = append(alert.ProcessingNotes, note)
 		
-		log.Printf("⚠️  高危安全告警: %s - %s", alert.RuleName, alert.Description)
+    log.Printf("[!] 高危安全告警: %s - %s", alert.RuleName, alert.Description)
 		
 	case "medium":
 		// 中等告警常规处理
@@ -124,7 +124,7 @@ func (p *AttackChainProcessor) ProcessAlert(alert *ManagedAlert) error {
 		// 检查攻击链是否需要升级
 		if chain := p.attackChains[chainID]; chain != nil && len(chain.Alerts) >= 3 {
 			alert.Severity = "high"
-			log.Printf("🔗 攻击链检测: %s 包含 %d 个相关告警", chainID, len(chain.Alerts))
+    log.Printf("[*] 攻击链检测: %s 包含 %d 个相关告警", chainID, len(chain.Alerts))
 		}
 	}
 	
@@ -286,7 +286,7 @@ func (p *ThreatIntelProcessor) ProcessAlert(alert *ManagedAlert) error {
 				time.Now().Format("2006-01-02 15:04:05"), indicator.Description, indicator.Source)
 			alert.ProcessingNotes = append(alert.ProcessingNotes, note)
 			
-			log.Printf("🎯 威胁情报匹配: %s - %s", alert.Event.Filename, indicator.Description)
+    log.Printf("[*] 威胁情报匹配: %s - %s", alert.Event.Filename, indicator.Description)
 		}
 	}
 	
