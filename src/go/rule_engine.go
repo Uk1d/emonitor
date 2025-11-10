@@ -400,19 +400,21 @@ func (e *EnhancedRuleEngine) MatchRules(event *EventJSON) []AlertEvent {
 			// 记录规则匹配性能
 			e.Optimizer.RecordMatchPerformance(ruleMatchTime, matched, rule.Original.Name)
 			
-			if matched {
-				alert := AlertEvent{
-					Timestamp:   time.Now(),
-					RuleName:    rule.Original.Name,
-					Severity:    rule.Original.Severity,
-					Description: rule.Original.Description,
-					Event:       event,
-					Tags:        rule.Original.Tags,
-					Metadata:    rule.Original.Metadata,
-					Actions:     rule.Original.Actions,
-				}
-				
-				alerts = append(alerts, alert)
+            if matched {
+                alert := AlertEvent{
+                    Timestamp:   time.Now(),
+                    RuleName:    rule.Original.Name,
+                    Severity:    rule.Original.Severity,
+                    Description: rule.Original.Description,
+                    Event:       event,
+                    Tags:        rule.Original.Tags,
+                    Metadata:    rule.Original.Metadata,
+                    Actions:     rule.Original.Actions,
+                    // 关键修复：为告警设置类别，供攻击链阶段与技术映射使用
+                    Category:    rule.Original.Category,
+                }
+                
+                alerts = append(alerts, alert)
 				
 				// 更新规则统计
 				e.updateRuleStats(rule.Original.Name, ruleMatchTime)

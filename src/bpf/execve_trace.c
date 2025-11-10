@@ -163,6 +163,9 @@ int trace_exit(struct trace_event_raw_sched_process_template *ctx) {
     struct event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
     if (!e) return 0;
     
+    // 清零事件结构，避免随机字段污染（如dst_addr/src_addr残留）
+    __builtin_memset(e, 0, sizeof(*e));
+    
     // 初始化事件基础信息
     init_event_base(e, EVENT_EXIT);
     

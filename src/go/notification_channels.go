@@ -1,12 +1,17 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"log"
-	"os"
-	"path/filepath"
-	"time"
+    "bytes"
+    "crypto/hmac"
+    "crypto/sha256"
+    "encoding/hex"
+    "encoding/json"
+    "fmt"
+    "log"
+    "net/http"
+    "os"
+    "path/filepath"
+    "time"
 )
 
 // LogNotificationChannel 日志通知渠道
@@ -212,15 +217,19 @@ func (c *EmailNotificationChannel) GetChannelName() string {
 
 // WebhookNotificationChannel Webhook通知渠道
 type WebhookNotificationChannel struct {
-	URL     string
-	Method  string
-	Headers map[string]string
-	Timeout time.Duration
+    URL     string
+    Method  string
+    Headers map[string]string
+    Timeout time.Duration
+    // 可选签名密钥（若配置则生成 HMAC-SHA256 签名）
+    Secret  string
+    // 重试次数（默认 0，表示不重试）
+    Retry   int
 }
 
 func (c *WebhookNotificationChannel) SendNotification(alert *ManagedAlert) error {
-	// 准备Webhook负载
-	payload := map[string]interface{}{
+    // 准备Webhook负载
+    payload := map[string]interface{}{
 		"alert_id":     alert.ID,
 		"rule_name":    alert.RuleName,
 		"severity":     alert.Severity,
@@ -237,20 +246,70 @@ func (c *WebhookNotificationChannel) SendNotification(alert *ManagedAlert) error
 		"actions":      alert.Actions,
 	}
 	
-	// 序列化负载
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("序列化Webhook负载失败: %v", err)
-	}
-	
-	// 模拟HTTP请求
-	log.Printf("🌐 [模拟Webhook] URL: %s, Method: %s", c.URL, c.Method)
-	log.Printf("🌐 [Webhook负载] %s", string(data))
-	
-	// 在实际实现中，这里应该发送真实的HTTP请求
-	// 使用 net/http 包发送POST请求到指定的URL
-	
-	return nil
+    // 序列化负载
+    data, err := json.Marshal(payload)
+    if err != nil {
+        return fmt.Errorf("序列化Webhook负载失败: %v", err)
+    }
+
+    if c.URL == "" {
+        return fmt.Errorf("Webhook URL 未配置")
+    }
+
+    method := c.Method
+    if method == "" {
+        method = "POST"
+    }
+
+    // 构造请求
+    req, err := http.NewRequest(method, c.URL, bytes.NewReader(data))
+    if err != nil {
+        return fmt.Errorf("创建Webhook请求失败: %v", err)
+    }
+    // 设置默认与自定义头
+    req.Header.Set("Content-Type", "application/json")
+    for k, v := range c.Headers {
+        req.Header.Set(k, v)
+    }
+    // 可选签名
+    if c.Secret != "" {
+        mac := hmac.New(sha256.New, []byte(c.Secret))
+        mac.Write(data)
+        sig := hex.EncodeToString(mac.Sum(nil))
+        req.Header.Set("X-eTracee-Signature", "sha256="+sig)
+        req.Header.Set("X-eTracee-Timestamp", time.Now().Format(time.RFC3339))
+    }
+
+    // 发送请求（含简单重试）
+    timeout := c.Timeout
+    if timeout == 0 {
+        timeout = 10 * time.Second
+    }
+    client := &http.Client{Timeout: timeout}
+
+    attempts := c.Retry + 1
+    var lastErr error
+    for i := 1; i <= attempts; i++ {
+        resp, err := client.Do(req)
+        if err != nil {
+            lastErr = err
+            log.Printf("[!] Webhook 发送失败（第 %d/%d 次）: %v", i, attempts, err)
+        } else {
+            // 读取并关闭响应体
+            _ = resp.Body.Close()
+            if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+                log.Printf("[+] Webhook 发送成功: %s %s (status=%d)", method, c.URL, resp.StatusCode)
+                return nil
+            }
+            lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+            log.Printf("[!] Webhook 返回非成功状态（第 %d/%d 次）: %v", i, attempts, lastErr)
+        }
+        // 简单退避
+        if i < attempts {
+            time.Sleep(time.Duration(i) * 500 * time.Millisecond)
+        }
+    }
+    return fmt.Errorf("Webhook 发送失败: %v", lastErr)
 }
 
 func (c *WebhookNotificationChannel) GetChannelName() string {

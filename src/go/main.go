@@ -1,26 +1,28 @@
 package main
 
 import (
-	"bytes"
-	"context"
-	"encoding/binary"
-	"encoding/json"
-	"flag"
-	"fmt"
-	"log"
-	"net"
-	"net/http"
-	"os"
-	"os/signal"
-	"strings"
-	"syscall"
-	"time"
+    "bytes"
+    "context"
+    "encoding/binary"
+    "encoding/json"
+    "flag"
+    "fmt"
+    "log"
+    "net"
+    "net/http"
+    "os"
+    "os/signal"
+    "runtime"
+    "strconv"
+    "strings"
+    "syscall"
+    "time"
 
-	"github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/link"
-	"github.com/cilium/ebpf/ringbuf"
-	"github.com/cilium/ebpf/rlimit"
-	"gopkg.in/yaml.v2"
+    "github.com/cilium/ebpf"
+    "github.com/cilium/ebpf/link"
+    "github.com/cilium/ebpf/ringbuf"
+    "github.com/cilium/ebpf/rlimit"
+    "gopkg.in/yaml.v2"
 )
 
 // 事件类型定义 - 与eBPF程序保持一致
@@ -114,40 +116,41 @@ type RawEvent struct {
 
 // JSON输出事件结构
 type EventJSON struct {
-	Timestamp   string    `json:"timestamp"`
-	PID         uint32    `json:"pid"`
-	PPID        uint32    `json:"ppid"`
-	UID         uint32    `json:"uid"`
-	GID         uint32    `json:"gid"`
-	SyscallID   uint32    `json:"syscall_id"`
-	EventType   string    `json:"event_type"`
-	RetCode     int32     `json:"ret_code"`
-	Comm        string    `json:"comm"`
-	Filename    string    `json:"filename,omitempty"`
-	Mode        uint32    `json:"mode,omitempty"`
-	Size        uint64    `json:"size,omitempty"`
-	Flags       uint32    `json:"flags,omitempty"`
-	SrcAddr     *AddrJSON `json:"src_addr,omitempty"`
-	DstAddr     *AddrJSON `json:"dst_addr,omitempty"`
-	OldUID      uint32    `json:"old_uid,omitempty"`
-	OldGID      uint32    `json:"old_gid,omitempty"`
-	NewUID      uint32    `json:"new_uid,omitempty"`
-	NewGID      uint32    `json:"new_gid,omitempty"`
-	Addr        uint64    `json:"addr,omitempty"`
-	Len         uint64    `json:"len,omitempty"`
-	Prot        string    `json:"prot,omitempty"`
-	TargetComm  string    `json:"target_comm,omitempty"`
-	TargetPID   uint32    `json:"target_pid,omitempty"`
-	Signal      uint32    `json:"signal,omitempty"`
-	Severity    string    `json:"severity,omitempty"`
-	RuleMatched string    `json:"rule_matched,omitempty"`
+    Timestamp   string    `json:"timestamp"`
+    PID         uint32    `json:"pid"`
+    PPID        uint32    `json:"ppid"`
+    UID         uint32    `json:"uid"`
+    GID         uint32    `json:"gid"`
+    SyscallID   uint32    `json:"syscall_id"`
+    EventType   string    `json:"event_type"`
+    RetCode     int32     `json:"ret_code"`
+    Comm        string    `json:"comm"`
+    Cmdline     string    `json:"cmdline,omitempty"`
+    Filename    string    `json:"filename,omitempty"`
+    Mode        uint32    `json:"mode,omitempty"`
+    Size        uint64    `json:"size,omitempty"`
+    Flags       uint32    `json:"flags,omitempty"`
+    SrcAddr     *AddrJSON `json:"src_addr,omitempty"`
+    DstAddr     *AddrJSON `json:"dst_addr,omitempty"`
+    OldUID      uint32    `json:"old_uid,omitempty"`
+    OldGID      uint32    `json:"old_gid,omitempty"`
+    NewUID      uint32    `json:"new_uid,omitempty"`
+    NewGID      uint32    `json:"new_gid,omitempty"`
+    Addr        uint64    `json:"addr,omitempty"`
+    Len         uint64    `json:"len,omitempty"`
+    Prot        string    `json:"prot,omitempty"`
+    TargetComm  string    `json:"target_comm,omitempty"`
+    TargetPID   uint32    `json:"target_pid,omitempty"`
+    Signal      uint32    `json:"signal,omitempty"`
+    Severity    string    `json:"severity,omitempty"`
+    RuleMatched string    `json:"rule_matched,omitempty"`
 }
 
 // 地址JSON结构
 type AddrJSON struct {
-	Family string `json:"family"`
-	Port   uint16 `json:"port"`
-	IP     string `json:"ip"`
+    Family string `json:"family"`
+    Port   uint16 `json:"port,omitempty"`
+    IP     string `json:"ip"`
 }
 
 // 安全规则配置
@@ -284,36 +287,49 @@ func protToString(prot uint32) string {
 
 // 地址族转换
 func familyToString(family uint16) string {
-	switch family {
-	case 2:
-		return "AF_INET"
-	case 10:
-		return "AF_INET6"
-	default:
-		return fmt.Sprintf("AF_%d", family)
-	}
+    switch family {
+    case 0:
+        return "AF_UNSPEC"
+    case 1:
+        return "AF_UNIX"
+    case 2:
+        return "AF_INET"
+    case 10:
+        return "AF_INET6"
+    case 16:
+        return "AF_NETLINK"
+    case 17:
+        return "AF_PACKET"
+    default:
+        return fmt.Sprintf("AF_%d", family)
+    }
 }
 
 // IP地址转换
 func addrToString(addr NetworkAddr) *AddrJSON {
-	if addr.Family == 0 {
-		return nil
-	}
+    if addr.Family == 0 {
+        return nil
+    }
 
-	result := &AddrJSON{
-		Family: familyToString(addr.Family),
-		Port:   ntohs(addr.Port), // 网络字节序转主机字节序
-	}
+    result := &AddrJSON{
+        Family: familyToString(addr.Family),
+    }
 
-	if addr.Family == 2 { // AF_INET
-		// IPv4地址存储在前4个字节中
-		ip := net.IPv4(addr.Addr[0], addr.Addr[1], addr.Addr[2], addr.Addr[3])
-		result.IP = ip.String()
-	} else if addr.Family == 10 { // AF_INET6
-		result.IP = net.IP(addr.Addr[:]).String()
-	}
+    switch addr.Family {
+    case 2: // AF_INET
+        result.Port = ntohs(addr.Port)
+        ip := net.IPv4(addr.Addr[0], addr.Addr[1], addr.Addr[2], addr.Addr[3])
+        result.IP = ip.String()
+    case 10: // AF_INET6
+        result.Port = ntohs(addr.Port)
+        result.IP = net.IP(addr.Addr[:]).String()
+    default:
+        // 非IP地址族（如AF_UNIX/NETLINK/PACKET）不设置IP与端口
+        result.Port = 0
+        result.IP = ""
+    }
 
-	return result
+    return result
 }
 
 // 网络字节序转主机字节序
@@ -327,17 +343,17 @@ func convertToJSON(raw *RawEvent) *EventJSON {
 	// 而事件是实时处理的，直接使用当前时间更准确
 	timestamp := time.Now()
 
-	event := &EventJSON{
-		Timestamp: timestamp.Format(time.RFC3339Nano),
-		PID:       raw.PID,
-		PPID:      raw.PPID,
-		UID:       raw.UID,
-		GID:       raw.GID,
-		SyscallID: raw.SyscallID,
-		EventType: EventType(raw.EventType).String(),
-		RetCode:   raw.RetCode,
-		Comm:      bytesToString(raw.Comm[:]),
-	}
+    event := &EventJSON{
+        Timestamp: timestamp.Format(time.RFC3339Nano),
+        PID:       raw.PID,
+        PPID:      raw.PPID,
+        UID:       raw.UID,
+        GID:       raw.GID,
+        SyscallID: raw.SyscallID,
+        EventType: EventType(raw.EventType).String(),
+        RetCode:   raw.RetCode,
+        Comm:      bytesToString(raw.Comm[:]),
+    }
 
 	// 文件名
 	if filename := bytesToString(raw.Filename[:]); filename != "" {
@@ -355,13 +371,20 @@ func convertToJSON(raw *RawEvent) *EventJSON {
 		event.Flags = raw.Flags
 	}
 
-	// 网络地址
-	if srcAddr := addrToString(raw.SrcAddr); srcAddr != nil {
-		event.SrcAddr = srcAddr
-	}
-	if dstAddr := addrToString(raw.DstAddr); dstAddr != nil {
-		event.DstAddr = dstAddr
-	}
+    // 网络地址：仅在网络类事件中输出，避免非网络事件出现误填字段
+    isNetEvent := false
+    switch event.EventType {
+    case "connect", "bind", "listen", "accept", "sendto", "recvfrom":
+        isNetEvent = true
+    }
+    if isNetEvent {
+        if srcAddr := addrToString(raw.SrcAddr); srcAddr != nil {
+            event.SrcAddr = srcAddr
+        }
+        if dstAddr := addrToString(raw.DstAddr); dstAddr != nil {
+            event.DstAddr = dstAddr
+        }
+    }
 
 	// 权限相关
 	if raw.OldUID != 0 || raw.NewUID != 0 {
@@ -396,6 +419,28 @@ func convertToJSON(raw *RawEvent) *EventJSON {
 	}
 
 	return event
+}
+
+// 补充事件的命令行：仅在Linux可用，读取 /proc/<pid>/cmdline
+func enrichEventCmdline(event *EventJSON) {
+    if runtime.GOOS != "linux" {
+        return
+    }
+    // 仅在进程类事件中尝试填充，避免无意义的开销
+    switch event.EventType {
+    case "execve", "fork", "clone", "exit":
+        // 读取cmdline（以\0分隔），转换为空格分隔的字符串
+        path := fmt.Sprintf("/proc/%d/cmdline", event.PID)
+        data, err := os.ReadFile(path)
+        if err != nil || len(data) == 0 {
+            return
+        }
+        s := strings.ReplaceAll(string(data), "\x00", " ")
+        s = strings.TrimSpace(s)
+        if s != "" {
+            event.Cmdline = s
+        }
+    }
 }
 
 // 加载安全配置
@@ -567,8 +612,8 @@ func main() {
 		AggregationThreshold: 5,
 		EnableAutoResolve:    true,
 		AutoResolveTimeout:   24 * time.Hour,
-		EnableNotifications:  true,
-		NotificationDelay:    30 * time.Second,
+        EnableNotifications:  true,
+        NotificationDelay:    0,
 		PersistAlerts:        true,
 		AlertStoragePath:     "data/alerts",
 	}
@@ -584,7 +629,7 @@ func main() {
 		} else {
 			storage = st
 			alertManager.SetStorage(storage)
-    log.Printf("[+] 存储后端已初始化: %s -> %s", storageCfg.Backend, storageCfg.SQLite.Path)
+			log.Printf("[+] 存储后端已初始化: %s -> %s", storageCfg.Backend, storageCfg.SQLite.Path)
 		}
 	}
 
@@ -592,19 +637,42 @@ func main() {
 	alertManager.RegisterProcessor(NewAttackChainProcessor())
 	alertManager.RegisterProcessor(NewThreatIntelProcessor())
 
-	// 注册额外的通知渠道
-	alertManager.RegisterNotificationChannel(&ConsoleNotificationChannel{EnableColors: true})
-	alertManager.RegisterNotificationChannel(&WebhookNotificationChannel{
-		URL:     "http://localhost:8080/webhook/alerts",
-		Method:  "POST",
-		Headers: map[string]string{"Content-Type": "application/json"},
-		Timeout: 10 * time.Second,
-	})
+    // 注册额外的通知渠道
+    alertManager.RegisterNotificationChannel(&ConsoleNotificationChannel{EnableColors: true})
+    // Webhook 通道改为按环境变量启用，避免默认连接失败噪声
+    if url := os.Getenv("ETRACEE_WEBHOOK_URL"); url != "" {
+        // 可选配置：超时、重试、签名密钥
+        timeout := 10 * time.Second
+        if t := os.Getenv("ETRACEE_WEBHOOK_TIMEOUT"); t != "" {
+            if d, err := time.ParseDuration(t); err == nil {
+                timeout = d
+            }
+        }
+        retry := 0
+        if r := os.Getenv("ETRACEE_WEBHOOK_RETRY"); r != "" {
+            if n, err := strconv.Atoi(r); err == nil && n >= 0 {
+                retry = n
+            }
+        }
+        secret := os.Getenv("ETRACEE_WEBHOOK_SECRET")
+
+        alertManager.RegisterNotificationChannel(&WebhookNotificationChannel{
+            URL:     url,
+            Method:  "POST",
+            Headers: map[string]string{"Content-Type": "application/json"},
+            Timeout: timeout,
+            Secret:  secret,
+            Retry:   retry,
+        })
+        log.Printf("[+] Webhook 通知已启用: %s (timeout=%s, retry=%d)", url, timeout.String(), retry)
+    } else {
+        log.Printf("[*] Webhook 通知未配置，跳过注册（设置 ETRACEE_WEBHOOK_URL 启用）")
+    }
 
 	// 初始化告警管理API服务器（接入存储查询）
 	alertAPI := NewAlertAPI(alertManager, 8888, storage)
 	go func() {
-    log.Println("[+] 告警管理API服务器启动在端口 8888")
+		log.Println("[+] 告警管理API服务器启动在端口 8888")
 		log.Println("  Web界面: http://localhost:8888")
 		log.Println("  API文档: http://localhost:8888/api/alerts")
 		if err := alertAPI.Start(); err != nil && err != http.ErrServerClosed {
@@ -701,15 +769,15 @@ func main() {
 	attachedCount := 0
 	if execLink != nil {
 		attachedCount++
-    log.Println("[+] execve 跟踪点已成功附加")
+		log.Println("[+] execve 跟踪点已成功附加")
 	}
 	if exitLink != nil {
 		attachedCount++
-    log.Println("[+] exit 跟踪点已成功附加")
+		log.Println("[+] exit 跟踪点已成功附加")
 	}
 	if netLink != nil {
 		attachedCount++
-    log.Println("[+] connect 跟踪点已成功附加")
+		log.Println("[+] connect 跟踪点已成功附加")
 	}
 
 	if attachedCount == 0 {
@@ -731,7 +799,7 @@ func main() {
 	if *dashboard {
 		dashboardInstance = NewDashboard()
 		go dashboardInstance.Start()
-    log.Println("[+] 命令行Dashboard已启动")
+		log.Println("[+] 命令行Dashboard已启动")
 	}
 
 	// 信号处理
@@ -810,22 +878,29 @@ func main() {
 			// 增加事件计数
 			eventCount++
 
-			// 转换为JSON格式
-			event := convertToJSON(&rawEvent)
+            // 转换为JSON格式
+            event := convertToJSON(&rawEvent)
+            // 进程事件补充命令行（Linux）
+            enrichEventCmdline(event)
 
-			// 应用过滤条件
-			if *pidMin > 0 && event.PID < uint32(*pidMin) {
-				continue
-			}
-			if *pidMax > 0 && event.PID > uint32(*pidMax) {
-				continue
-			}
-			if *uidMin > 0 && event.UID < uint32(*uidMin) {
-				continue
-			}
-			if *uidMax > 0 && event.UID > uint32(*uidMax) {
-				continue
-			}
+            // 应用过滤条件
+            if *pidMin > 0 && event.PID < uint32(*pidMin) {
+                continue
+            }
+            if *pidMax > 0 && event.PID > uint32(*pidMax) {
+                continue
+            }
+            if *uidMin > 0 && event.UID < uint32(*uidMin) {
+                continue
+            }
+            if *uidMax > 0 && event.UID > uint32(*uidMax) {
+                continue
+            }
+
+            // WebSocket实时推送原始事件（通过AlertAPI）
+            if alertAPI != nil {
+                alertAPI.BroadcastEvent(event)
+            }
 
 			// 应用增强安全规则引擎
 			alerts := ruleEngine.MatchRules(event)
@@ -858,11 +933,18 @@ func main() {
 				eventContext.DetectAttackChain(event, alertEvent)
 			}
 
-			// 获取并显示攻击链
+			// 无告警事件：如果存在相关攻击链则更新（不新建），以避免评分停滞
+			if len(alerts) == 0 {
+				eventContext.DetectAttackChain(event, nil)
+			}
+
+			// 获取并显示攻击链（仅输出本次事件更新的链，避免重复噪声）
 			if attackChains := eventContext.GetAttackChains(); len(attackChains) > 0 {
 				for _, chain := range attackChains {
-    log.Printf("[*] 检测到攻击链: ID=%s, 阶段=%s, 风险级别=%s, 技术数量=%d",
-						chain.ID, chain.CurrentStage, chain.RiskLevel, len(chain.Techniques))
+					if chain.LastUpdate.After(eventStartTime) || chain.LastUpdate.Equal(eventStartTime) {
+						log.Printf("[*] 检测到攻击链: ID=%s, 阶段=%s, 风险级别=%s, 危害评分=%.2f",
+							chain.ID, chain.CurrentStage, chain.RiskLevel, chain.ImpactScore)
+					}
 				}
 			}
 
@@ -888,8 +970,13 @@ func main() {
 				}
 
 				// 记录详细的告警信息
-    log.Printf("[!] 安全告警已处理: ID=%s, 规则=%s, 严重级别=%s, 状态=%s",
+				log.Printf("[!] 安全告警已处理: ID=%s, 规则=%s, 严重级别=%s, 状态=%s",
 					managedAlert.ID, managedAlert.RuleName, managedAlert.Severity, managedAlert.Status)
+
+				// WebSocket实时推送
+				if alertAPI != nil {
+					alertAPI.BroadcastAlert(managedAlert)
+				}
 			}
 
 			// 更新Dashboard统计（如果启用）
@@ -902,12 +989,12 @@ func main() {
 				_ = storage.SaveEvent(event)
 			}
 
-			// 输出JSON
-			if jsonData, err := json.Marshal(event); err == nil {
-				if !*dashboard {
-					fmt.Println(string(jsonData))
-				}
-			}
+            // 输出JSON
+            if jsonData, err := json.Marshal(event); err == nil {
+                if !*dashboard {
+                    fmt.Println(string(jsonData))
+                }
+            }
 		}
 	}
 }

@@ -186,7 +186,16 @@ static inline void init_event_base(struct event *e, u32 event_type) {
     e->timestamp = bpf_ktime_get_ns();                              // 纳秒级时间戳
     e->event_type = event_type;                                     // 事件类型
     e->pid = pid;                                                   // 进程ID
-    e->ppid = 0;                                                    // 父进程ID（需要时可扩展）
+    // 通过CO-RE读取父进程ID，提升事件父子关联的准确性
+    // 注意：在某些早期内核或特殊场景下real_parent可能不可用，保留安全回退为0
+    {
+        struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+        u32 ppid = 0;
+        if (task) {
+            ppid = BPF_CORE_READ(task, real_parent, tgid);
+        }
+        e->ppid = ppid;
+    }
     e->uid = bpf_get_current_uid_gid() & 0xFFFFFFFF;               // 用户ID（低32位）
     e->gid = (bpf_get_current_uid_gid() >> 32) & 0xFFFFFFFF;       // 组ID（高32位）
     bpf_get_current_comm(&e->comm, sizeof(e->comm));               // 进程命令名
@@ -231,6 +240,9 @@ static inline void init_event_base(struct event *e, u32 event_type) {
         /* 从ring buffer预留事件空间 */ \
         struct event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0); \
         if (!e) return 0; \
+        \
+        /* 清零事件结构，避免未设置字段残留随机值 */ \
+        __builtin_memset(e, 0, sizeof(*e)); \
         \
         /* 初始化事件基础信息 */ \
         init_event_base(e, event_type); \
