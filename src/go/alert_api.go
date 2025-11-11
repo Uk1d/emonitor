@@ -5,6 +5,7 @@ import (
     "fmt"
     "log"
     "net/http"
+    "net/url"
     "os"
     "strconv"
     "strings"
@@ -19,19 +20,27 @@ type AlertAPI struct {
     alertManager *AlertManager
     server       *http.Server
     storage      Storage
+    eventContext *EventContext
 
     // WebSocket
     wsUpgrader websocket.Upgrader
     wsClients  map[*WSClient]struct{}
     wsMutex    sync.Mutex
     wsQueueSize int
+
+    // Security & CORS
+    allowedOrigins map[string]struct{}
+    apiToken       string
+    bindAddr       string
+    requireAuth    bool
 }
 
 // NewAlertAPI 创建告警API服务器
-func NewAlertAPI(alertManager *AlertManager, port int, storage Storage) *AlertAPI {
+func NewAlertAPI(alertManager *AlertManager, port int, storage Storage, eventContext *EventContext) *AlertAPI {
     api := &AlertAPI{
         alertManager: alertManager,
         storage:      storage,
+        eventContext: eventContext,
     }
 
 	mux := http.NewServeMux()
@@ -42,14 +51,41 @@ func NewAlertAPI(alertManager *AlertManager, port int, storage Storage) *AlertAP
 	mux.HandleFunc("/api/alerts/stats", api.handleAlertStats)
 	mux.HandleFunc("/api/attack-chains", api.handleAttackChains)
 	mux.HandleFunc("/api/events", api.handleEvents)
-	// WebSocket实时推送
-	mux.HandleFunc("/ws", api.handleWebSocket)
+    // WebSocket实时推送
+    mux.HandleFunc("/ws", api.handleWebSocket)
+
+    // 图谱子图查询
+    mux.HandleFunc("/api/graph/subgraph", api.handleGraphSubgraph)
 
 	// 静态文件服务（用于Web界面）
 	mux.HandleFunc("/", api.handleWebInterface)
 
-    // 初始化WebSocket
-    api.wsUpgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+    // 读取安全配置
+    // 允许来源（逗号分隔）。为空时默认仅允许同源与本地。
+    api.allowedOrigins = make(map[string]struct{})
+    if v := strings.TrimSpace(os.Getenv("ETRACEE_ALLOWED_ORIGINS")); v != "" {
+        for _, o := range strings.Split(v, ",") {
+            o = strings.TrimSpace(o)
+            if o != "" {
+                api.allowedOrigins[o] = struct{}{}
+            }
+        }
+    }
+    // 令牌（存在则启用鉴权）
+    api.apiToken = strings.TrimSpace(os.Getenv("ETRACEE_API_TOKEN"))
+    api.requireAuth = api.apiToken != ""
+    // 绑定地址（如 127.0.0.1 或 0.0.0.0）
+    api.bindAddr = strings.TrimSpace(os.Getenv("ETRACEE_BIND_ADDR"))
+
+    // 安全默认：未设置令牌且未显式指定绑定地址时，仅绑定到本地环回
+    // 避免默认开发/演示环境将接口暴露到外网导致未授权访问
+    if api.apiToken == "" && api.bindAddr == "" {
+        api.bindAddr = "127.0.0.1"
+        log.Printf("[*] 安全默认生效：未设置 ETRACEE_API_TOKEN，API 仅绑定到 %s", api.bindAddr)
+    }
+
+    // 初始化WebSocket（严格Origin校验）
+    api.wsUpgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return api.checkOrigin(r) }}
     api.wsClients = make(map[*WSClient]struct{})
     // 队列大小可通过环境变量配置
     api.wsQueueSize = 256
@@ -59,12 +95,18 @@ func NewAlertAPI(alertManager *AlertManager, port int, storage Storage) *AlertAP
         }
     }
 
-	api.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: api.corsMiddleware(mux),
-	}
+    addr := fmt.Sprintf(":%d", port)
+    if api.bindAddr != "" {
+        if strings.Contains(api.bindAddr, ":") {
+            // ETRACEE_BIND_ADDR 已包含端口，则直接使用
+            addr = api.bindAddr
+        } else {
+            addr = fmt.Sprintf("%s:%d", api.bindAddr, port)
+        }
+    }
+    api.server = &http.Server{Addr: addr, Handler: api.corsMiddleware(mux)}
 
-	return api
+    return api
 }
 
 // WSClient 表示一个带发送队列的 WebSocket 客户端（用于反压）
@@ -111,8 +153,8 @@ func (api *AlertAPI) wsWritePump(client *WSClient) {
 
 // Start 启动API服务器
 func (api *AlertAPI) Start() error {
-	log.Printf("告警管理API服务器启动在端口: %s", api.server.Addr)
-	return api.server.ListenAndServe()
+    log.Printf("告警管理API服务器启动: %s", api.server.Addr)
+    return api.server.ListenAndServe()
 }
 
 // Stop 停止API服务器
@@ -122,18 +164,131 @@ func (api *AlertAPI) Stop() error {
 
 // CORS中间件
 func (api *AlertAPI) corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        origin := r.Header.Get("Origin")
+        if origin != "" {
+            if api.isOriginAllowed(origin, r) {
+                w.Header().Set("Access-Control-Allow-Origin", origin)
+                // 保证不同Origin时浏览器缓存区分
+                w.Header().Set("Vary", "Origin")
+            } else {
+                // 非允许来源：对预检直接拒绝，对普通请求403
+                if r.Method == http.MethodOptions {
+                    w.WriteHeader(http.StatusNoContent)
+                    return
+                }
+                if api.isProtectedPath(r.URL.Path) {
+                    http.Error(w, "Forbidden origin", http.StatusForbidden)
+                    return
+                }
+            }
+        }
 
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+        w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Sec-WebSocket-Protocol")
 
-		next.ServeHTTP(w, r)
-	})
+        // 预检请求直接返回
+        if r.Method == http.MethodOptions {
+            w.WriteHeader(http.StatusNoContent)
+            return
+        }
+
+        // 简单令牌鉴权：仅在设置了 ETRACEE_API_TOKEN 时启用
+        if api.requireAuth && api.isProtectedPath(r.URL.Path) && !api.isAuthorized(r) {
+            http.Error(w, "Unauthorized", http.StatusUnauthorized)
+            return
+        }
+
+        next.ServeHTTP(w, r)
+    })
+}
+
+// checkOrigin 用于 WebSocket Upgrader 的 Origin 校验
+func (api *AlertAPI) checkOrigin(r *http.Request) bool {
+    origin := r.Header.Get("Origin")
+    if origin == "" {
+        // 非浏览器或未设置Origin的客户端：允许，但后续仍需要鉴权（如开启令牌）
+        return true
+    }
+    return api.isOriginAllowed(origin, r)
+}
+
+// isOriginAllowed 判断请求来源是否在允许列表或与服务同源
+func (api *AlertAPI) isOriginAllowed(origin string, r *http.Request) bool {
+    if origin == "" {
+        return true
+    }
+    if _, ok := api.allowedOrigins[origin]; ok {
+        return true
+    }
+    // 默认仅允许同源（Origin 的host与请求Host匹配）以及常见本地地址
+    if u, err := url.Parse(origin); err == nil {
+        host := u.Host
+        if host == r.Host {
+            return true
+        }
+        // 兼容无端口的Host比较
+        requestHost := r.Host
+        if strings.Contains(requestHost, ":") {
+            requestHost = strings.Split(requestHost, ":")[0]
+        }
+        if strings.Contains(host, ":") {
+            host = strings.Split(host, ":")[0]
+        }
+        if host == requestHost {
+            return true
+        }
+        if host == "127.0.0.1" || host == "localhost" {
+            return true
+        }
+    }
+    return false
+}
+
+// isProtectedPath 需要鉴权的路径（API与WS）
+func (api *AlertAPI) isProtectedPath(path string) bool {
+    if path == "/ws" {
+        return true
+    }
+    if strings.HasPrefix(path, "/api/") || path == "/api" {
+        return true
+    }
+    return false
+}
+
+// isAuthorized 简单令牌校验：支持 Authorization: Bearer <token>、URL 查询参数 token、Sec-WebSocket-Protocol
+func (api *AlertAPI) isAuthorized(r *http.Request) bool {
+    if !api.requireAuth {
+        return true
+    }
+    // Authorization 头
+    auth := strings.TrimSpace(r.Header.Get("Authorization"))
+    if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+        t := strings.TrimSpace(auth[7:])
+        if t == api.apiToken {
+            return true
+        }
+    }
+    // 查询参数 token
+    if t := strings.TrimSpace(r.URL.Query().Get("token")); t != "" && t == api.apiToken {
+        return true
+    }
+    // WebSocket 子协议传递
+    if sp := r.Header.Get("Sec-WebSocket-Protocol"); sp != "" {
+        for _, part := range strings.Split(sp, ",") {
+            p := strings.TrimSpace(part)
+            if strings.EqualFold(p, api.apiToken) {
+                return true
+            }
+            if strings.HasPrefix(strings.ToLower(p), "bearer ") {
+                t := strings.TrimSpace(p[7:])
+                if t == api.apiToken {
+                    return true
+                }
+            }
+        }
+    }
+    return false
 }
 
 // 处理告警列表请求
@@ -263,6 +418,56 @@ func (api *AlertAPI) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// 处理图谱子图查询
+func (api *AlertAPI) handleGraphSubgraph(w http.ResponseWriter, r *http.Request) {
+    if r.Method != "GET" {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+
+    // 解析查询参数
+    pidStr := r.URL.Query().Get("pid")
+    chainID := r.URL.Query().Get("chain_id")
+    maxNodes := 200
+    if v := strings.TrimSpace(r.URL.Query().Get("max_nodes")); v != "" {
+        if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 5000 {
+            maxNodes = n
+        }
+    }
+    var sincePtr, untilPtr *time.Time
+    if v := r.URL.Query().Get("since"); v != "" {
+        if ts, err := time.Parse(time.RFC3339, v); err == nil {
+            sincePtr = &ts
+        }
+    }
+    if v := r.URL.Query().Get("until"); v != "" {
+        if ts, err := time.Parse(time.RFC3339, v); err == nil {
+            untilPtr = &ts
+        }
+    }
+
+    opts := SubgraphOptions{Since: sincePtr, Until: untilPtr, MaxNodes: maxNodes}
+    var g *Subgraph
+    if pidStr != "" {
+        if pid, err := strconv.Atoi(pidStr); err == nil && pid >= 0 {
+            g = BuildSubgraphByPID(api.eventContext, uint32(pid), opts)
+        }
+    }
+    if g == nil && chainID != "" {
+        g = BuildSubgraphByChainID(api.eventContext, chainID, opts)
+    }
+    if g == nil {
+        g = &Subgraph{Nodes: []GraphNode{}, Edges: []GraphEdge{}}
+        g.finalize()
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]interface{}{
+        "graph":     g,
+        "timestamp": time.Now().Format(time.RFC3339),
+    })
 }
 
 // 处理告警详情请求
@@ -567,6 +772,14 @@ func (api *AlertAPI) BroadcastEvent(event *EventJSON) {
     api.broadcast(map[string]interface{}{"type": "event", "ts": time.Now().Format(time.RFC3339), "data": event})
 }
 
+// BroadcastGraphUpdate 推送图谱增量（用于前端 D3 可视化实时更新）
+func (api *AlertAPI) BroadcastGraphUpdate(update *GraphUpdate) {
+    if update == nil {
+        return
+    }
+    api.broadcast(map[string]interface{}{"type": "graph_update", "ts": time.Now().Format(time.RFC3339), "data": update})
+}
+
 func (api *AlertAPI) writeWS(conn *websocket.Conn, payload interface{}) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -669,11 +882,11 @@ func (api *AlertAPI) handleAttackChains(w http.ResponseWriter, r *http.Request) 
 
 // 处理Web界面请求
 func (api *AlertAPI) handleWebInterface(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/" {
-		// 设置正确的Content-Type响应头，指定UTF-8编码
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		// 返回简单的HTML界面
-		html := `
+    if r.URL.Path == "/" {
+        // 设置正确的Content-Type响应头，指定UTF-8编码
+        w.Header().Set("Content-Type", "text/html; charset=utf-8")
+        // 返回简单的HTML界面
+        html := `
 <!DOCTYPE html>
 <html>
 <head>
@@ -693,6 +906,7 @@ func (api *AlertAPI) handleWebInterface(w http.ResponseWriter, r *http.Request) 
         .status-false_positive { color: grey; }
         #ws-status { margin-top: 10px; font-weight: bold; }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
 </head>
 <body>
     <h1>eTracee 告警中心</h1>
@@ -736,7 +950,13 @@ func (api *AlertAPI) handleWebInterface(w http.ResponseWriter, r *http.Request) 
         </tbody>
     </table>
 
+    <h2>实时图谱</h2>
+    <div id="graph" style="width:100%; height:520px; border:1px solid #ddd; border-radius:8px; background:#fff;"></div>
+
     <script>
+        // 读取 token：优先 URL 参数，其次 localStorage
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token') || window.localStorage.getItem('ETRACEE_TOKEN') || '';
         const wsStatus = document.getElementById('ws-status');
         const totalAlertsSpan = document.getElementById('total-alerts');
         const activeAlertsSpan = document.getElementById('active-alerts');
@@ -745,8 +965,89 @@ func (api *AlertAPI) handleWebInterface(w http.ResponseWriter, r *http.Request) 
         const alertsTbody = document.getElementById('alerts-tbody');
         const eventsTbody = document.getElementById('events-tbody');
 
+        // 图谱可视化（D3）初始化
+        const graphEl = document.getElementById('graph');
+        let graphWidth = graphEl ? graphEl.clientWidth : 0;
+        const graphHeight = 520;
+        const svg = d3.select('#graph').append('svg').attr('width', graphWidth).attr('height', graphHeight);
+        const linkGroup = svg.append('g');
+        const nodeGroup = svg.append('g');
+        const nodeIndex = new Map();
+        const linkIndex = new Map();
+        const simulation = d3.forceSimulation()
+            .force('link', d3.forceLink().id(d => d.id).distance(120))
+            .force('charge', d3.forceManyBody().strength(-80))
+            .force('center', d3.forceCenter(graphWidth/2, graphHeight/2));
+
+        function onGraphUpdate(update) {
+            const nodes = (update && update.nodes) || [];
+            const edges = (update && update.edges) || [];
+            for (const n of nodes) {
+                const ex = nodeIndex.get(n.id);
+                if (ex) { Object.assign(ex, n); ex.count = (ex.count || 0) + 1; }
+                else { nodeIndex.set(n.id, { ...n, count: 1 }); }
+            }
+            for (const e of edges) {
+                const s = e.source || e.src || e.from;
+                const t = e.target || e.dst || e.to;
+                const key = s + '|' + t + '|' + (e.type || '');
+                const ex = linkIndex.get(key);
+                if (ex) { Object.assign(ex, e); ex.id = key; ex.count = (ex.count || 0) + 1; }
+                else { linkIndex.set(key, { ...e, id: key, count: 1, source: s, target: t }); }
+            }
+            renderGraph();
+        }
+
+        function renderGraph() {
+            const nodes = Array.from(nodeIndex.values());
+            const links = Array.from(linkIndex.values());
+
+            const linkSel = linkGroup.selectAll('line').data(links, d => d.id);
+            linkSel.exit().remove();
+            linkSel.enter().append('line')
+                .attr('stroke', '#aab')
+                .attr('stroke-width', d => Math.min(4, 1 + (d.count || 1)/10));
+
+            const nodeSel = nodeGroup.selectAll('circle').data(nodes, d => d.id);
+            nodeSel.exit().remove();
+            const nodeEnter = nodeSel.enter().append('circle')
+                .attr('r', 8)
+                .attr('fill', d => colorByType(d.type))
+                .call(drag(simulation));
+            nodeEnter.append('title').text(d => d.label || d.id);
+            nodeSel.merge(nodeEnter);
+
+            simulation.nodes(nodes).on('tick', () => {
+                nodeGroup.selectAll('circle').attr('cx', d => d.x).attr('cy', d => d.y);
+                linkGroup.selectAll('line')
+                    .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+                    .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+            });
+            simulation.force('link').links(links);
+            simulation.alpha(0.6).restart();
+        }
+
+        function colorByType(t) {
+            switch (t) {
+                case 'process': return '#1f77b4';
+                case 'file': return '#2ca02c';
+                case 'network': return '#d62728';
+                case 'attack_chain': return '#9467bd';
+                case 'alert': return '#ff7f0e';
+                default: return '#7f7f7f';
+            }
+        }
+
+        function drag(sim) {
+            function dragstarted(event, d) { if (!event.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }
+            function dragged(event, d) { d.fx = event.x; d.fy = event.y; }
+            function dragended(event, d) { if (!event.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }
+            return d3.drag().on('start', dragstarted).on('drag', dragged).on('end', dragended);
+        }
+
         function connect() {
-            const ws = new WebSocket("ws://" + window.location.host + "/ws");
+            const wsURL = "ws://" + window.location.host + "/ws" + (token ? ("?token=" + encodeURIComponent(token)) : "");
+            const ws = new WebSocket(wsURL);
 
             ws.onopen = function() {
                 wsStatus.textContent = "WebSocket 已连接";
@@ -761,6 +1062,8 @@ func (api *AlertAPI) handleWebInterface(w http.ResponseWriter, r *http.Request) 
                     addAlert(message.data);
                 } else if (message.type === 'event') {
                     addEvent(message.data);
+                } else if (message.type === 'graph_update') {
+                    onGraphUpdate(message.data);
                 }
             };
 
@@ -820,7 +1123,7 @@ func (api *AlertAPI) handleWebInterface(w http.ResponseWriter, r *http.Request) 
 </body>
 </html>
 `
-		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(html))
-	}
+        w.Header().Set("Content-Type", "text/html")
+        w.Write([]byte(html))
+    }
 }

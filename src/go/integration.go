@@ -373,7 +373,7 @@ func (it *IntegrationTest) testAPIServerIntegration() IntegrationTestResult {
 	}
 
 	// 启动API服务器
-    alertAPI := NewAlertAPI(it.alertManager, 8889, nil)
+    alertAPI := NewAlertAPI(it.alertManager, 8889, nil, it.eventContext)
 	go func() {
 		if err := alertAPI.Start(); err != nil {
 			log.Printf("API服务器启动失败: %v", err)

@@ -670,7 +670,7 @@ func main() {
     }
 
 	// 初始化告警管理API服务器（接入存储查询）
-	alertAPI := NewAlertAPI(alertManager, 8888, storage)
+    alertAPI := NewAlertAPI(alertManager, 8888, storage, eventContext)
 	go func() {
 		log.Println("[+] 告警管理API服务器启动在端口 8888")
 		log.Println("  Web界面: http://localhost:8888")
@@ -900,6 +900,10 @@ func main() {
             // WebSocket实时推送原始事件（通过AlertAPI）
             if alertAPI != nil {
                 alertAPI.BroadcastEvent(event)
+                // 推送图谱增量，供前端 D3 实时可视化
+                if gu := BuildGraphUpdateFromEvent(eventContext, event); gu != nil {
+                    alertAPI.BroadcastGraphUpdate(gu)
+                }
             }
 
 			// 应用增强安全规则引擎
