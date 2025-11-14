@@ -1,0 +1,377 @@
+# eTracee 增强安全规则配置文件
+# 版本: v1.4.0 - Enhanced Rule Engine
+# 定义各种攻击模式和异常行为检测规则
+# 支持复杂条件表达式、逻辑运算和智能匹配
+
+# 增强全局配置
+global:
+  # 事件类型开关
+  enable_file_events: true
+  enable_network_events: true
+  enable_process_events: true
+  enable_permission_events: true
+  enable_memory_events: true
+  
+  # 过滤配置
+  min_uid_filter: 1000      # 最小UID过滤 (普通用户)
+  max_uid_filter: 65535     # 最大UID过滤
+  
+  # 性能配置
+  max_events_per_second: 10000
+  ring_buffer_size: 262144  # 256KB
+  
+  # 增强功能配置
+  alert_throttle_seconds: 60    # 全局告警节流
+  max_alert_history: 1000       # 最大告警历史记录
+  enable_rule_stats: true       # 启用规则统计
+  log_level: "info"             # 日志级别
+  enable_context_storage: true  # 启用事件上下文存储
+
+# 增强攻击检测规则
+detection_rules:
+  
+  # 反向Shell检测 - 使用增强逻辑运算
+  reverse_shell:
+    - name: "bash_reverse_shell_advanced"
+      description: "高级bash反向shell检测 - 支持多种变体"
+      logic_operator: "AND"
+      enabled: true
+      throttle_seconds: 30
+      tags: ["reverse_shell", "bash", "network", "command_execution"]
+      actions: ["log_alert", "send_notification", "block_process"]
+      metadata:
+        mitre_attack: "T1059.004"
+        confidence: "high"
+        category: "command_execution"
+      conditions:
+        - comm: "regex:^(bash|sh|zsh|fish)$"
+        - filename: "regex:/bin/(bash|sh|zsh|fish)"
+        - uid: ">=1000"
+      severity: "high"
+      
+    - name: "nc_reverse_shell_enhanced"
+      description: "增强netcat反向shell检测"
+      logic_operator: "OR"
+      enabled: true
+      throttle_seconds: 15
+      tags: ["reverse_shell", "netcat", "network"]
+      actions: ["log_alert", "send_notification"]
+      metadata:
+        mitre_attack: "T1059"
+        confidence: "medium"
+        category: "network_connection"
+      conditions:
+        - comm: "regex:^n(et)?c(at)?.*"
+        - filename: "regex:/bin/n(et)?c(at)?"
+        - comm: "regex:^(socat|telnet)$"
+      severity: "high"
+    
+    - name: "python_reverse_shell"
+      description: "Python反向shell检测"
+      logic_operator: "AND"
+      enabled: true
+      throttle_seconds: 45
+      tags: ["reverse_shell", "python", "scripting"]
+      actions: ["log_alert", "send_notification"]
+      metadata:
+        mitre_attack: "T1059.006"
+        confidence: "medium"
+        category: "script_execution"
+      conditions:
+        - comm: "regex:^python[0-9.]*$"
+        - filename: "regex:/usr/bin/python[0-9.]*"
+        - uid: ">=1000"
+      severity: "medium"
+
+  # 权限提升检测 - 使用数值比较
+  privilege_escalation:
+    - name: "setuid_escalation_advanced"
+      description: "高级SETUID权限提升检测"
+      logic_operator: "AND"
+      enabled: true
+      throttle_seconds: 60
+      tags: ["privilege_escalation", "setuid", "permissions"]
+      actions: ["log_alert", "send_notification", "block_process"]
+      metadata:
+        mitre_attack: "T1548.001"
+        confidence: "high"
+        category: "privilege_escalation"
+      conditions:
+        - syscall_id: 105  # setuid系统调用
+        - uid: ">=1000"    # 普通用户UID
+        - pid: ">1"
+      severity: "critical"
+      
+    - name: "sudo_abuse_enhanced"
+      description: "增强sudo滥用检测"
+      logic_operator: "AND"
+      enabled: true
+      throttle_seconds: 30
+      tags: ["sudo", "privilege_escalation", "abuse"]
+      actions: ["log_alert", "send_notification"]
+      metadata:
+        mitre_attack: "T1548.003"
+        confidence: "medium"
+        category: "sudo_usage"
+      conditions:
+        - comm: "sudo"
+        - filename: "/usr/bin/sudo"
+        - uid: ">=1000"
+      severity: "medium"
+
+  # 敏感文件访问 - 使用正则表达式匹配
+  sensitive_file_access:
+    - name: "passwd_file_access_enhanced"
+      description: "增强密码文件访问检测"
+      logic_operator: "OR"
+      enabled: true
+      throttle_seconds: 120
+      tags: ["file_access", "sensitive_data", "credentials"]
+      actions: ["log_alert", "send_notification"]
+      metadata:
+        mitre_attack: "T1005"
+        confidence: "high"
+        category: "credential_access"
+      conditions:
+        - filename: "regex:/etc/(passwd|shadow|sudoers|group)"
+        - filename: "regex:/root/.*"
+        - uid: ">=1000"
+      severity: "high"
+      
+    - name: "ssh_key_access_enhanced"
+      description: "增强SSH密钥访问检测"
+      logic_operator: "AND"
+      enabled: true
+      throttle_seconds: 60
+      tags: ["ssh", "key_access", "authentication"]
+      actions: ["log_alert", "send_notification"]
+      metadata:
+        mitre_attack: "T1552.004"
+        confidence: "medium"
+        category: "credential_access"
+      conditions:
+        - filename: "regex:/home/[^/]+/\\.ssh/(id_rsa|id_dsa|id_ecdsa|authorized_keys)"
+        - uid: ">=1000"
+      severity: "medium"
+
+  # 网络异常行为 - 使用复杂条件
+  network_anomaly:
+    - name: "suspicious_outbound_connection_enhanced"
+      description: "增强可疑出站连接检测"
+      logic_operator: "AND"
+      enabled: true
+      throttle_seconds: 90
+      tags: ["network", "connection", "anomaly", "outbound"]
+      actions: ["log_alert"]
+      metadata:
+        mitre_attack: "T1071"
+        confidence: "low"
+        category: "command_and_control"
+      conditions:
+        - event_type: "network_connect"
+        - uid: ">=1000"
+        - pid: ">100"
+      severity: "medium"
+      
+    - name: "port_scanning_enhanced"
+      description: "增强端口扫描行为检测"
+      logic_operator: "AND"
+      enabled: true
+      throttle_seconds: 30
+      tags: ["network", "scanning", "reconnaissance"]
+      actions: ["log_alert", "send_notification"]
+      metadata:
+        mitre_attack: "T1046"
+        confidence: "medium"
+        category: "discovery"
+      conditions:
+        - event_type: "network_connect"
+        - uid: ">=1000"
+      severity: "high"
+
+  # 进程注入检测 - 使用高级匹配
+  process_injection:
+    - name: "ptrace_injection_enhanced"
+      description: "增强ptrace进程注入检测"
+      logic_operator: "AND"
+      enabled: true
+      throttle_seconds: 45
+      tags: ["process_injection", "ptrace", "code_injection"]
+      actions: ["log_alert", "send_notification", "block_process"]
+      metadata:
+        mitre_attack: "T1055"
+        confidence: "high"
+        category: "defense_evasion"
+      conditions:
+        - syscall_id: 101  # ptrace系统调用
+        - pid: ">1"
+        - uid: ">=1000"
+      severity: "high"
+      
+    - name: "memory_manipulation_enhanced"
+      description: "增强内存操作异常检测"
+      logic_operator: "AND"
+      enabled: true
+      throttle_seconds: 60
+      tags: ["memory", "manipulation", "protection"]
+      actions: ["log_alert"]
+      metadata:
+        mitre_attack: "T1055"
+        confidence: "medium"
+        category: "defense_evasion"
+      conditions:
+        - syscall_id: 125  # mprotect系统调用
+        - uid: ">=1000"
+      severity: "medium"
+
+  # 文件系统异常 - 使用频率和模式检测
+  filesystem_anomaly:
+    - name: "mass_file_deletion_enhanced"
+      description: "增强大量文件删除检测"
+      logic_operator: "AND"
+      enabled: true
+      throttle_seconds: 60
+      tags: ["filesystem", "deletion", "mass_operation"]
+      actions: ["log_alert", "send_notification"]
+      metadata:
+        mitre_attack: "T1485"
+        confidence: "high"
+        category: "impact"
+      conditions:
+        - event_type: "file_delete"
+        - uid: ">=1000"
+        - pid: ">1"
+      severity: "high"
+      
+    - name: "system_file_modification_enhanced"
+      description: "增强系统文件修改检测"
+      logic_operator: "AND"
+      enabled: true
+      throttle_seconds: 30
+      tags: ["filesystem", "system_files", "modification"]
+      actions: ["log_alert", "send_notification", "block_process"]
+      metadata:
+        mitre_attack: "T1222"
+        confidence: "critical"
+        category: "defense_evasion"
+      conditions:
+        - filename: "regex:^/(bin|sbin|usr|etc|lib).*"
+        - event_type: "file_modify"
+        - uid: ">=1000"
+      severity: "critical"
+
+  # 恶意软件行为 - 使用智能模式匹配
+  malware_behavior:
+    - name: "suspicious_binary_execution_enhanced"
+      description: "增强可疑二进制执行检测"
+      logic_operator: "OR"
+      enabled: true
+      throttle_seconds: 45
+      tags: ["malware", "binary_execution", "suspicious_location"]
+      actions: ["log_alert", "send_notification", "block_process"]
+      metadata:
+        mitre_attack: "T1036"
+        confidence: "high"
+        category: "defense_evasion"
+      conditions:
+        - filename: "regex:^/(tmp|var/tmp|dev/shm)/.*"
+        - comm: "regex:.*(backdoor|shell|hack|exploit).*"
+        - comm: "regex:^[a-z]{1,3}$"  # 短随机名称
+      severity: "high"
+      
+    - name: "kernel_module_loading_enhanced"
+      description: "增强内核模块加载检测"
+      logic_operator: "AND"
+      enabled: true
+      throttle_seconds: 120
+      tags: ["kernel", "module_loading", "rootkit"]
+      actions: ["log_alert", "send_notification", "block_process"]
+      metadata:
+        mitre_attack: "T1547.006"
+        confidence: "critical"
+        category: "persistence"
+      conditions:
+        - syscall_id: 175  # init_module系统调用
+        - uid: ">=1000"
+      severity: "critical"
+    
+    - name: "process_hollowing_detection"
+      description: "进程镂空检测"
+      logic_operator: "AND"
+      enabled: true
+      throttle_seconds: 60
+      tags: ["process_hollowing", "injection", "evasion"]
+      actions: ["log_alert", "send_notification", "block_process"]
+      metadata:
+        mitre_attack: "T1055.012"
+        confidence: "high"
+        category: "defense_evasion"
+      conditions:
+        - event_type: "process_create"
+        - pid: ">1"
+        - ppid: ">1"
+      severity: "high"
+
+# 增强白名单配置
+whitelist:
+  processes:
+    - "/usr/bin/ssh"
+    - "/usr/bin/scp"
+    - "/usr/bin/rsync"
+    - "/usr/sbin/sshd"
+    - "/bin/systemd"
+    - "/usr/bin/sudo"
+    
+  files:
+    - "/var/log/*"
+    - "/tmp/.X11-unix/*"
+    - "/proc/*"
+    - "/sys/*"
+    - "/dev/*"
+    
+  networks:
+    - "127.0.0.1"
+    - "::1"
+    - "192.168.*"
+    - "10.*"
+  
+  users:
+    - "root"
+    - "daemon"
+    - "nobody"
+    - "systemd+"
+
+# 增强响应动作配置
+response_actions:
+  low_severity:
+    - "log_alert"
+    
+  medium_severity:
+    - "log_alert"
+    - "send_notification"
+    
+  high_severity:
+    - "log_alert"
+    - "send_notification"
+    - "generate_context"
+    
+  critical_severity:
+    - "log_alert"
+    - "send_notification"
+    - "block_process"
+    - "generate_report"
+    - "store_context"
+
+# 增强日志配置
+logging:
+  level: "info"
+  file: "/var/log/etracee/security.log"
+  max_size: "100MB"
+  max_files: 10
+  format: "json"
+  
+  # 新增配置
+  enable_structured_logging: true
+  include_context: true
+  alert_log_file: "/var/log/etracee/alerts.log"
+  stats_log_file: "/var/log/etracee/stats.log"

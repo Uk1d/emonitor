@@ -1,0 +1,6 @@
+storage:
+  backend: sqlite
+  sqlite:
+    path: data/etracee.db
+    journal_mode: WAL
+    synchronous: NORMAL

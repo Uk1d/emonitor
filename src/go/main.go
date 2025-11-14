@@ -1,28 +1,29 @@
 package main
 
 import (
-    "bytes"
-    "context"
-    "encoding/binary"
-    "encoding/json"
-    "flag"
-    "fmt"
-    "log"
-    "net"
-    "net/http"
-    "os"
-    "os/signal"
-    "runtime"
-    "strconv"
-    "strings"
-    "syscall"
-    "time"
+	"bytes"
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"etracee/internal/common/config"
+	"flag"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"runtime"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
 
-    "github.com/cilium/ebpf"
-    "github.com/cilium/ebpf/link"
-    "github.com/cilium/ebpf/ringbuf"
-    "github.com/cilium/ebpf/rlimit"
-    "gopkg.in/yaml.v2"
+	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/ringbuf"
+	"github.com/cilium/ebpf/rlimit"
+	"gopkg.in/yaml.v2"
 )
 
 // 事件类型定义 - 与eBPF程序保持一致
@@ -116,68 +117,41 @@ type RawEvent struct {
 
 // JSON输出事件结构
 type EventJSON struct {
-    Timestamp   string    `json:"timestamp"`
-    PID         uint32    `json:"pid"`
-    PPID        uint32    `json:"ppid"`
-    UID         uint32    `json:"uid"`
-    GID         uint32    `json:"gid"`
-    SyscallID   uint32    `json:"syscall_id"`
-    EventType   string    `json:"event_type"`
-    RetCode     int32     `json:"ret_code"`
-    Comm        string    `json:"comm"`
-    Cmdline     string    `json:"cmdline,omitempty"`
-    Filename    string    `json:"filename,omitempty"`
-    Mode        uint32    `json:"mode,omitempty"`
-    Size        uint64    `json:"size,omitempty"`
-    Flags       uint32    `json:"flags,omitempty"`
-    SrcAddr     *AddrJSON `json:"src_addr,omitempty"`
-    DstAddr     *AddrJSON `json:"dst_addr,omitempty"`
-    OldUID      uint32    `json:"old_uid,omitempty"`
-    OldGID      uint32    `json:"old_gid,omitempty"`
-    NewUID      uint32    `json:"new_uid,omitempty"`
-    NewGID      uint32    `json:"new_gid,omitempty"`
-    Addr        uint64    `json:"addr,omitempty"`
-    Len         uint64    `json:"len,omitempty"`
-    Prot        string    `json:"prot,omitempty"`
-    TargetComm  string    `json:"target_comm,omitempty"`
-    TargetPID   uint32    `json:"target_pid,omitempty"`
-    Signal      uint32    `json:"signal,omitempty"`
-    Severity    string    `json:"severity,omitempty"`
-    RuleMatched string    `json:"rule_matched,omitempty"`
+	Timestamp   string    `json:"timestamp"`
+	PID         uint32    `json:"pid"`
+	PPID        uint32    `json:"ppid"`
+	UID         uint32    `json:"uid"`
+	GID         uint32    `json:"gid"`
+	SyscallID   uint32    `json:"syscall_id"`
+	EventType   string    `json:"event_type"`
+	RetCode     int32     `json:"ret_code"`
+	Comm        string    `json:"comm"`
+	Cmdline     string    `json:"cmdline,omitempty"`
+	Filename    string    `json:"filename,omitempty"`
+	Mode        uint32    `json:"mode,omitempty"`
+	Size        uint64    `json:"size,omitempty"`
+	Flags       uint32    `json:"flags,omitempty"`
+	SrcAddr     *AddrJSON `json:"src_addr,omitempty"`
+	DstAddr     *AddrJSON `json:"dst_addr,omitempty"`
+	OldUID      uint32    `json:"old_uid,omitempty"`
+	OldGID      uint32    `json:"old_gid,omitempty"`
+	NewUID      uint32    `json:"new_uid,omitempty"`
+	NewGID      uint32    `json:"new_gid,omitempty"`
+	Addr        uint64    `json:"addr,omitempty"`
+	Len         uint64    `json:"len,omitempty"`
+	Prot        string    `json:"prot,omitempty"`
+	TargetComm  string    `json:"target_comm,omitempty"`
+	TargetPID   uint32    `json:"target_pid,omitempty"`
+	Signal      uint32    `json:"signal,omitempty"`
+	Severity    string    `json:"severity,omitempty"`
+	RuleMatched string    `json:"rule_matched,omitempty"`
 }
 
 // 地址JSON结构
 type AddrJSON struct {
-    Family string `json:"family"`
-    Port   uint16 `json:"port,omitempty"`
-    IP     string `json:"ip"`
-}
-
-// 安全规则配置
-type SecurityConfig struct {
-	Global struct {
-		EnableFileEvents       bool `yaml:"enable_file_events"`
-		EnableNetworkEvents    bool `yaml:"enable_network_events"`
-		EnableProcessEvents    bool `yaml:"enable_process_events"`
-		EnablePermissionEvents bool `yaml:"enable_permission_events"`
-		EnableMemoryEvents     bool `yaml:"enable_memory_events"`
-		MinUIDFilter           uint `yaml:"min_uid_filter"`
-		MaxUIDFilter           uint `yaml:"max_uid_filter"`
-	} `yaml:"global"`
-	DetectionRules map[string][]DetectionRule `yaml:"detection_rules"`
-	Whitelist      struct {
-		Processes []string `yaml:"processes"`
-		Files     []string `yaml:"files"`
-		Networks  []string `yaml:"networks"`
-	} `yaml:"whitelist"`
-}
-
-type DetectionRule struct {
-	Name          string                   `yaml:"name"`
-	Description   string                   `yaml:"description"`
-	Conditions    []map[string]interface{} `yaml:"conditions"`
-	Severity      string                   `yaml:"severity"`
-	FreqThreshold int                      `yaml:"frequency_threshold"`
+	Family string `json:"family"`
+	Port   uint16 `json:"port,omitempty"`
+	IP     string `json:"ip"`
 }
 
 // 事件类型转换
@@ -287,49 +261,49 @@ func protToString(prot uint32) string {
 
 // 地址族转换
 func familyToString(family uint16) string {
-    switch family {
-    case 0:
-        return "AF_UNSPEC"
-    case 1:
-        return "AF_UNIX"
-    case 2:
-        return "AF_INET"
-    case 10:
-        return "AF_INET6"
-    case 16:
-        return "AF_NETLINK"
-    case 17:
-        return "AF_PACKET"
-    default:
-        return fmt.Sprintf("AF_%d", family)
-    }
+	switch family {
+	case 0:
+		return "AF_UNSPEC"
+	case 1:
+		return "AF_UNIX"
+	case 2:
+		return "AF_INET"
+	case 10:
+		return "AF_INET6"
+	case 16:
+		return "AF_NETLINK"
+	case 17:
+		return "AF_PACKET"
+	default:
+		return fmt.Sprintf("AF_%d", family)
+	}
 }
 
 // IP地址转换
 func addrToString(addr NetworkAddr) *AddrJSON {
-    if addr.Family == 0 {
-        return nil
-    }
+	if addr.Family == 0 {
+		return nil
+	}
 
-    result := &AddrJSON{
-        Family: familyToString(addr.Family),
-    }
+	result := &AddrJSON{
+		Family: familyToString(addr.Family),
+	}
 
-    switch addr.Family {
-    case 2: // AF_INET
-        result.Port = ntohs(addr.Port)
-        ip := net.IPv4(addr.Addr[0], addr.Addr[1], addr.Addr[2], addr.Addr[3])
-        result.IP = ip.String()
-    case 10: // AF_INET6
-        result.Port = ntohs(addr.Port)
-        result.IP = net.IP(addr.Addr[:]).String()
-    default:
-        // 非IP地址族（如AF_UNIX/NETLINK/PACKET）不设置IP与端口
-        result.Port = 0
-        result.IP = ""
-    }
+	switch addr.Family {
+	case 2: // AF_INET
+		result.Port = ntohs(addr.Port)
+		ip := net.IPv4(addr.Addr[0], addr.Addr[1], addr.Addr[2], addr.Addr[3])
+		result.IP = ip.String()
+	case 10: // AF_INET6
+		result.Port = ntohs(addr.Port)
+		result.IP = net.IP(addr.Addr[:]).String()
+	default:
+		// 非IP地址族（如AF_UNIX/NETLINK/PACKET）不设置IP与端口
+		result.Port = 0
+		result.IP = ""
+	}
 
-    return result
+	return result
 }
 
 // 网络字节序转主机字节序
@@ -343,17 +317,17 @@ func convertToJSON(raw *RawEvent) *EventJSON {
 	// 而事件是实时处理的，直接使用当前时间更准确
 	timestamp := time.Now()
 
-    event := &EventJSON{
-        Timestamp: timestamp.Format(time.RFC3339Nano),
-        PID:       raw.PID,
-        PPID:      raw.PPID,
-        UID:       raw.UID,
-        GID:       raw.GID,
-        SyscallID: raw.SyscallID,
-        EventType: EventType(raw.EventType).String(),
-        RetCode:   raw.RetCode,
-        Comm:      bytesToString(raw.Comm[:]),
-    }
+	event := &EventJSON{
+		Timestamp: timestamp.Format(time.RFC3339Nano),
+		PID:       raw.PID,
+		PPID:      raw.PPID,
+		UID:       raw.UID,
+		GID:       raw.GID,
+		SyscallID: raw.SyscallID,
+		EventType: EventType(raw.EventType).String(),
+		RetCode:   raw.RetCode,
+		Comm:      bytesToString(raw.Comm[:]),
+	}
 
 	// 文件名
 	if filename := bytesToString(raw.Filename[:]); filename != "" {
@@ -371,20 +345,20 @@ func convertToJSON(raw *RawEvent) *EventJSON {
 		event.Flags = raw.Flags
 	}
 
-    // 网络地址：仅在网络类事件中输出，避免非网络事件出现误填字段
-    isNetEvent := false
-    switch event.EventType {
-    case "connect", "bind", "listen", "accept", "sendto", "recvfrom":
-        isNetEvent = true
-    }
-    if isNetEvent {
-        if srcAddr := addrToString(raw.SrcAddr); srcAddr != nil {
-            event.SrcAddr = srcAddr
-        }
-        if dstAddr := addrToString(raw.DstAddr); dstAddr != nil {
-            event.DstAddr = dstAddr
-        }
-    }
+	// 网络地址：仅在网络类事件中输出，避免非网络事件出现误填字段
+	isNetEvent := false
+	switch event.EventType {
+	case "connect", "bind", "listen", "accept", "sendto", "recvfrom":
+		isNetEvent = true
+	}
+	if isNetEvent {
+		if srcAddr := addrToString(raw.SrcAddr); srcAddr != nil {
+			event.SrcAddr = srcAddr
+		}
+		if dstAddr := addrToString(raw.DstAddr); dstAddr != nil {
+			event.DstAddr = dstAddr
+		}
+	}
 
 	// 权限相关
 	if raw.OldUID != 0 || raw.NewUID != 0 {
@@ -423,24 +397,24 @@ func convertToJSON(raw *RawEvent) *EventJSON {
 
 // 补充事件的命令行：仅在Linux可用，读取 /proc/<pid>/cmdline
 func enrichEventCmdline(event *EventJSON) {
-    if runtime.GOOS != "linux" {
-        return
-    }
-    // 仅在进程类事件中尝试填充，避免无意义的开销
-    switch event.EventType {
-    case "execve", "fork", "clone", "exit":
-        // 读取cmdline（以\0分隔），转换为空格分隔的字符串
-        path := fmt.Sprintf("/proc/%d/cmdline", event.PID)
-        data, err := os.ReadFile(path)
-        if err != nil || len(data) == 0 {
-            return
-        }
-        s := strings.ReplaceAll(string(data), "\x00", " ")
-        s = strings.TrimSpace(s)
-        if s != "" {
-            event.Cmdline = s
-        }
-    }
+	if runtime.GOOS != "linux" {
+		return
+	}
+	// 仅在进程类事件中尝试填充，避免无意义的开销
+	switch event.EventType {
+	case "execve", "fork", "clone", "exit":
+		// 读取cmdline（以\0分隔），转换为空格分隔的字符串
+		path := fmt.Sprintf("/proc/%d/cmdline", event.PID)
+		data, err := os.ReadFile(path)
+		if err != nil || len(data) == 0 {
+			return
+		}
+		s := strings.ReplaceAll(string(data), "\x00", " ")
+		s = strings.TrimSpace(s)
+		if s != "" {
+			event.Cmdline = s
+		}
+	}
 }
 
 // 加载安全配置
@@ -494,69 +468,56 @@ func loadEnhancedSecurityConfig(configPath string, ruleEngine *EnhancedRuleEngin
 	return nil
 }
 
-func loadSecurityConfig(configPath string) (*SecurityConfig, error) {
-	data, err := os.ReadFile(configPath)
+func loadLegacyRulesAsEnhanced(path string, e *EnhancedRuleEngine) error {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	var config SecurityConfig
-	err = yaml.Unmarshal(data, &config)
-	if err != nil {
-		return nil, err
+	var legacy struct {
+		Global struct {
+			EnableFileEvents       bool   `yaml:"enable_file_events"`
+			EnableNetworkEvents    bool   `yaml:"enable_network_events"`
+			EnableProcessEvents    bool   `yaml:"enable_process_events"`
+			EnablePermissionEvents bool   `yaml:"enable_permission_events"`
+			MinUIDFilter           uint32 `yaml:"min_uid_filter"`
+			MaxUIDFilter           uint32 `yaml:"max_uid_filter"`
+		} `yaml:"global"`
+		DetectionRules map[string][]struct {
+			Name          string                   `yaml:"name"`
+			Description   string                   `yaml:"description"`
+			Conditions    []map[string]interface{} `yaml:"conditions"`
+			Severity      string                   `yaml:"severity"`
+			FreqThreshold int                      `yaml:"frequency_threshold"`
+		} `yaml:"detection_rules"`
+		Whitelist WhitelistConfig `yaml:"whitelist"`
 	}
-
-	return &config, nil
-}
-
-// 简单的规则匹配引擎
-func matchSecurityRules(event *EventJSON, config *SecurityConfig) {
-	for category, rules := range config.DetectionRules {
-		for _, rule := range rules {
-			if matchRule(event, rule) {
-				event.Severity = rule.Severity
-				event.RuleMatched = fmt.Sprintf("%s:%s", category, rule.Name)
-				log.Printf("SECURITY ALERT: %s - %s (PID: %d, Comm: %s)",
-					rule.Name, rule.Description, event.PID, event.Comm)
-				break
-			}
+	if err := yaml.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	e.GlobalConfig.EnableFileEvents = legacy.Global.EnableFileEvents
+	e.GlobalConfig.EnableNetworkEvents = legacy.Global.EnableNetworkEvents
+	e.GlobalConfig.EnableProcessEvents = legacy.Global.EnableProcessEvents
+	e.GlobalConfig.EnablePermissionEvents = legacy.Global.EnablePermissionEvents
+	e.GlobalConfig.MinUIDFilter = legacy.Global.MinUIDFilter
+	e.GlobalConfig.MaxUIDFilter = legacy.Global.MaxUIDFilter
+	e.WhitelistConfig = legacy.Whitelist
+	e.Rules = make(map[string][]EnhancedDetectionRule)
+	for cat, rules := range legacy.DetectionRules {
+		list := make([]EnhancedDetectionRule, 0, len(rules))
+		for _, r := range rules {
+			list = append(list, EnhancedDetectionRule{
+				Name:          r.Name,
+				Description:   r.Description,
+				Conditions:    r.Conditions,
+				Severity:      r.Severity,
+				LogicOperator: "AND",
+				Enabled:       true,
+				Category:      cat,
+			})
 		}
+		e.Rules[cat] = list
 	}
-}
-
-// 规则匹配逻辑
-func matchRule(event *EventJSON, rule DetectionRule) bool {
-	for _, condition := range rule.Conditions {
-		if !matchCondition(event, condition) {
-			return false
-		}
-	}
-	return true
-}
-
-// 条件匹配逻辑
-func matchCondition(event *EventJSON, condition map[string]interface{}) bool {
-	if eventType, ok := condition["event_type"].(string); ok {
-		if event.EventType != eventType {
-			return false
-		}
-	}
-
-	if filename, ok := condition["filename"].([]interface{}); ok {
-		found := false
-		for _, f := range filename {
-			if strings.Contains(event.Filename, f.(string)) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-
-	// 可以添加更多条件匹配逻辑
-	return true
+	return nil
 }
 
 func main() {
@@ -576,7 +537,7 @@ func main() {
 
 	// 命令行参数解析
 	var (
-		configPath = flag.String("config", "config/security_rules.yaml", "安全规则配置文件路径")
+		configPath = flag.String("config", "config/enhanced_security_config.yaml", "安全规则配置文件路径")
 		dashboard  = flag.Bool("dashboard", false, "启用命令行Dashboard")
 		pidMin     = flag.Uint("pid-min", 0, "过滤PID最小值")
 		pidMax     = flag.Uint("pid-max", 0, "过滤PID最大值")
@@ -612,8 +573,8 @@ func main() {
 		AggregationThreshold: 5,
 		EnableAutoResolve:    true,
 		AutoResolveTimeout:   24 * time.Hour,
-        EnableNotifications:  true,
-        NotificationDelay:    0,
+		EnableNotifications:  true,
+		NotificationDelay:    0,
 		PersistAlerts:        true,
 		AlertStoragePath:     "data/alerts",
 	}
@@ -637,40 +598,40 @@ func main() {
 	alertManager.RegisterProcessor(NewAttackChainProcessor())
 	alertManager.RegisterProcessor(NewThreatIntelProcessor())
 
-    // 注册额外的通知渠道
-    alertManager.RegisterNotificationChannel(&ConsoleNotificationChannel{EnableColors: true})
-    // Webhook 通道改为按环境变量启用，避免默认连接失败噪声
-    if url := os.Getenv("ETRACEE_WEBHOOK_URL"); url != "" {
-        // 可选配置：超时、重试、签名密钥
-        timeout := 10 * time.Second
-        if t := os.Getenv("ETRACEE_WEBHOOK_TIMEOUT"); t != "" {
-            if d, err := time.ParseDuration(t); err == nil {
-                timeout = d
-            }
-        }
-        retry := 0
-        if r := os.Getenv("ETRACEE_WEBHOOK_RETRY"); r != "" {
-            if n, err := strconv.Atoi(r); err == nil && n >= 0 {
-                retry = n
-            }
-        }
-        secret := os.Getenv("ETRACEE_WEBHOOK_SECRET")
+	// 注册额外的通知渠道
+	alertManager.RegisterNotificationChannel(&ConsoleNotificationChannel{EnableColors: true})
+	// Webhook 通道改为按环境变量启用，避免默认连接失败噪声
+	if url := os.Getenv("ETRACEE_WEBHOOK_URL"); url != "" {
+		// 可选配置：超时、重试、签名密钥
+		timeout := 10 * time.Second
+		if t := os.Getenv("ETRACEE_WEBHOOK_TIMEOUT"); t != "" {
+			if d, err := time.ParseDuration(t); err == nil {
+				timeout = d
+			}
+		}
+		retry := 0
+		if r := os.Getenv("ETRACEE_WEBHOOK_RETRY"); r != "" {
+			if n, err := strconv.Atoi(r); err == nil && n >= 0 {
+				retry = n
+			}
+		}
+		secret := os.Getenv("ETRACEE_WEBHOOK_SECRET")
 
-        alertManager.RegisterNotificationChannel(&WebhookNotificationChannel{
-            URL:     url,
-            Method:  "POST",
-            Headers: map[string]string{"Content-Type": "application/json"},
-            Timeout: timeout,
-            Secret:  secret,
-            Retry:   retry,
-        })
-        log.Printf("[+] Webhook 通知已启用: %s (timeout=%s, retry=%d)", url, timeout.String(), retry)
-    } else {
-        log.Printf("[*] Webhook 通知未配置，跳过注册（设置 ETRACEE_WEBHOOK_URL 启用）")
-    }
+		alertManager.RegisterNotificationChannel(&WebhookNotificationChannel{
+			URL:     url,
+			Method:  "POST",
+			Headers: map[string]string{"Content-Type": "application/json"},
+			Timeout: timeout,
+			Secret:  secret,
+			Retry:   retry,
+		})
+		log.Printf("[+] Webhook 通知已启用: %s (timeout=%s, retry=%d)", url, timeout.String(), retry)
+	} else {
+		log.Printf("[*] Webhook 通知未配置，跳过注册（设置 ETRACEE_WEBHOOK_URL 启用）")
+	}
 
 	// 初始化告警管理API服务器（接入存储查询）
-    alertAPI := NewAlertAPI(alertManager, 8888, storage, eventContext)
+	alertAPI := NewAlertAPI(alertManager, 8888, storage, eventContext)
 	go func() {
 		log.Println("[+] 告警管理API服务器启动在端口 8888")
 		log.Println("  Web界面: http://localhost:8888")
@@ -680,23 +641,38 @@ func main() {
 		}
 	}()
 
+	go func() {
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for range t.C {
+			if alertAPI != nil {
+				if stats := alertAPI.computeAlertStats(); stats != nil {
+					alertAPI.broadcast(map[string]interface{}{"type": "stats", "ts": time.Now().Format(time.RFC3339), "data": stats})
+				}
+			}
+		}
+	}()
+
 	// 加载安全配置到增强规则引擎
 	if err := loadEnhancedSecurityConfig(*configPath, ruleEngine); err != nil {
 		log.Printf("Warning: Failed to load enhanced security config: %v", err)
-		// 使用默认配置
+		if err2 := loadLegacyRulesAsEnhanced("config/security_rules.yaml", ruleEngine); err2 != nil {
+			log.Printf("Warning: Fallback to legacy rules failed: %v", err2)
+		}
+
 		ruleEngine.GlobalConfig = EnhancedGlobalConfig{
-			EnableFileEvents:       true,
-			EnableNetworkEvents:    true,
-			EnableProcessEvents:    true,
-			EnablePermissionEvents: true,
-			EnableMemoryEvents:     true,
-			MinUIDFilter:           1000,
-			MaxUIDFilter:           65535,
-			MaxEventsPerSecond:     10000,
-			AlertThrottleSeconds:   60,
-			MaxAlertHistory:        1000,
-			EnableRuleStats:        true,
-			LogLevel:               "info",
+			EnableFileEvents:       config.BoolFromEnv("ETRACEE_ENABLE_FILE", true),
+			EnableNetworkEvents:    config.BoolFromEnv("ETRACEE_ENABLE_NETWORK", true),
+			EnableProcessEvents:    config.BoolFromEnv("ETRACEE_ENABLE_PROCESS", true),
+			EnablePermissionEvents: config.BoolFromEnv("ETRACEE_ENABLE_PERMISSION", true),
+			EnableMemoryEvents:     config.BoolFromEnv("ETRACEE_ENABLE_MEMORY", true),
+			MinUIDFilter:           config.Uint32FromEnv("ETRACEE_UID_MIN", 0),
+			MaxUIDFilter:           config.Uint32FromEnv("ETRACEE_UID_MAX", 65535),
+			MaxEventsPerSecond:     config.IntFromEnv("ETRACEE_MAX_EPS", 10000),
+			AlertThrottleSeconds:   config.IntFromEnv("ETRACEE_ALERT_THROTTLE", 60),
+			MaxAlertHistory:        config.IntFromEnv("ETRACEE_MAX_ALERT_HISTORY", 1000),
+			EnableRuleStats:        config.BoolFromEnv("ETRACEE_ENABLE_RULE_STATS", true),
+			LogLevel:               config.StringFromEnv("ETRACEE_LOG_LEVEL", "info"),
 		}
 	}
 
@@ -758,6 +734,86 @@ func main() {
 		defer netLink.Close()
 	}
 
+	bindLink, err := link.Tracepoint("syscalls", "sys_enter_bind", coll.Programs["trace_bind"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 bind 跟踪点: %v", err)
+		bindLink = nil
+	} else {
+		defer bindLink.Close()
+	}
+
+	listenLink, err := link.Tracepoint("syscalls", "sys_enter_listen", coll.Programs["trace_listen"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 listen 跟踪点: %v", err)
+		listenLink = nil
+	} else {
+		defer listenLink.Close()
+	}
+
+	openLink, err := link.Tracepoint("syscalls", "sys_enter_openat", coll.Programs["trace_openat"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 openat 跟踪点: %v", err)
+		openLink = nil
+	} else {
+		defer openLink.Close()
+	}
+
+	closeLink, err := link.Tracepoint("syscalls", "sys_enter_close", coll.Programs["trace_close"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 close 跟踪点: %v", err)
+		closeLink = nil
+	} else {
+		defer closeLink.Close()
+	}
+
+	unlinkLink, err := link.Tracepoint("syscalls", "sys_enter_unlinkat", coll.Programs["trace_unlink"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 unlinkat 跟踪点: %v", err)
+		unlinkLink = nil
+	} else {
+		defer unlinkLink.Close()
+	}
+
+	chmodLink, err := link.Tracepoint("syscalls", "sys_enter_fchmodat", coll.Programs["trace_chmod"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 fchmodat 跟踪点: %v", err)
+		chmodLink = nil
+	} else {
+		defer chmodLink.Close()
+	}
+
+	mmapLink, err := link.Tracepoint("syscalls", "sys_enter_mmap", coll.Programs["trace_mmap"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 mmap 跟踪点: %v", err)
+		mmapLink = nil
+	} else {
+		defer mmapLink.Close()
+	}
+
+	mprotectLink, err := link.Tracepoint("syscalls", "sys_enter_mprotect", coll.Programs["trace_mprotect"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 mprotect 跟踪点: %v", err)
+		mprotectLink = nil
+	} else {
+		defer mprotectLink.Close()
+	}
+
+	ptraceLink, err := link.Tracepoint("syscalls", "sys_enter_ptrace", coll.Programs["trace_ptrace"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 ptrace 跟踪点: %v", err)
+		ptraceLink = nil
+	} else {
+		defer ptraceLink.Close()
+	}
+
+	killLink, err := link.Tracepoint("syscalls", "sys_enter_kill", coll.Programs["trace_kill"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 kill 跟踪点: %v", err)
+		killLink = nil
+	} else {
+		defer killLink.Close()
+	}
+
 	// 打开Ring Buffer
 	rd, err := ringbuf.NewReader(coll.Maps["rb"])
 	if err != nil {
@@ -778,6 +834,46 @@ func main() {
 	if netLink != nil {
 		attachedCount++
 		log.Println("[+] connect 跟踪点已成功附加")
+	}
+	if bindLink != nil {
+		attachedCount++
+		log.Println("[+] bind 跟踪点已成功附加")
+	}
+	if listenLink != nil {
+		attachedCount++
+		log.Println("[+] listen 跟踪点已成功附加")
+	}
+	if openLink != nil {
+		attachedCount++
+		log.Println("[+] openat 跟踪点已成功附加")
+	}
+	if closeLink != nil {
+		attachedCount++
+		log.Println("[+] close 跟踪点已成功附加")
+	}
+	if unlinkLink != nil {
+		attachedCount++
+		log.Println("[+] unlinkat 跟踪点已成功附加")
+	}
+	if chmodLink != nil {
+		attachedCount++
+		log.Println("[+] fchmodat 跟踪点已成功附加")
+	}
+	if mmapLink != nil {
+		attachedCount++
+		log.Println("[+] mmap 跟踪点已成功附加")
+	}
+	if mprotectLink != nil {
+		attachedCount++
+		log.Println("[+] mprotect 跟踪点已成功附加")
+	}
+	if ptraceLink != nil {
+		attachedCount++
+		log.Println("[+] ptrace 跟踪点已成功附加")
+	}
+	if killLink != nil {
+		attachedCount++
+		log.Println("[+] kill 跟踪点已成功附加")
 	}
 
 	if attachedCount == 0 {
@@ -809,7 +905,6 @@ func main() {
 		sig := <-c
 		log.Printf("接收到信号 %v，正在优雅关闭程序...", sig)
 
-		// 显示统计信息
 		duration := time.Since(startTime)
 		log.Printf("程序运行时间: %v", duration.Round(time.Second))
 		log.Printf("总共处理事件: %d", eventCount)
@@ -818,6 +913,9 @@ func main() {
 		}
 
 		cancel()
+		if alertAPI != nil {
+			_ = alertAPI.Stop()
+		}
 	}()
 
 	log.Println("程序正在运行，按 Ctrl+C 退出...")
@@ -856,15 +954,26 @@ func main() {
 			log.Println("程序已安全退出")
 			return
 
-		case err := <-errorChan:
+		case err, ok := <-errorChan:
+			if !ok {
+				continue
+			}
 			if err == ringbuf.ErrClosed {
 				log.Println("环形缓冲区已关闭，程序退出")
 				return
 			}
-			log.Printf("从环形缓冲区读取数据时出错: %v", err)
-			return
+			if err != nil {
+				log.Printf("从环形缓冲区读取数据时出错: %v", err)
+				return
+			}
 
-		case record := <-eventChan:
+		case record, ok := <-eventChan:
+			if !ok {
+				continue
+			}
+			if len(record.RawSample) == 0 {
+				continue
+			}
 			eventStartTime := time.Now()
 
 			// 解析事件
@@ -878,33 +987,33 @@ func main() {
 			// 增加事件计数
 			eventCount++
 
-            // 转换为JSON格式
-            event := convertToJSON(&rawEvent)
-            // 进程事件补充命令行（Linux）
-            enrichEventCmdline(event)
+			// 转换为JSON格式
+			event := convertToJSON(&rawEvent)
+			// 进程事件补充命令行（Linux）
+			enrichEventCmdline(event)
 
-            // 应用过滤条件
-            if *pidMin > 0 && event.PID < uint32(*pidMin) {
-                continue
-            }
-            if *pidMax > 0 && event.PID > uint32(*pidMax) {
-                continue
-            }
-            if *uidMin > 0 && event.UID < uint32(*uidMin) {
-                continue
-            }
-            if *uidMax > 0 && event.UID > uint32(*uidMax) {
-                continue
-            }
+			// 应用过滤条件
+			if *pidMin > 0 && event.PID < uint32(*pidMin) {
+				continue
+			}
+			if *pidMax > 0 && event.PID > uint32(*pidMax) {
+				continue
+			}
+			if *uidMin > 0 && event.UID < uint32(*uidMin) {
+				continue
+			}
+			if *uidMax > 0 && event.UID > uint32(*uidMax) {
+				continue
+			}
 
-            // WebSocket实时推送原始事件（通过AlertAPI）
-            if alertAPI != nil {
-                alertAPI.BroadcastEvent(event)
-                // 推送图谱增量，供前端 D3 实时可视化
-                if gu := BuildGraphUpdateFromEvent(eventContext, event); gu != nil {
-                    alertAPI.BroadcastGraphUpdate(gu)
-                }
-            }
+			// WebSocket实时推送原始事件（通过AlertAPI）
+			if alertAPI != nil {
+				alertAPI.BroadcastEvent(event)
+				// 推送图谱增量，供前端 D3 实时可视化
+				if gu := BuildGraphUpdateFromEvent(eventContext, event); gu != nil {
+					alertAPI.BroadcastGraphUpdate(gu)
+				}
+			}
 
 			// 应用增强安全规则引擎
 			alerts := ruleEngine.MatchRules(event)
@@ -993,12 +1102,12 @@ func main() {
 				_ = storage.SaveEvent(event)
 			}
 
-            // 输出JSON
-            if jsonData, err := json.Marshal(event); err == nil {
-                if !*dashboard {
-                    fmt.Println(string(jsonData))
-                }
-            }
+			// 输出JSON
+			if jsonData, err := json.Marshal(event); err == nil {
+				if !*dashboard {
+					fmt.Println(string(jsonData))
+				}
+			}
 		}
 	}
 }

@@ -72,14 +72,16 @@ $(BPF_OBJECT): $(BPF_MAIN_SOURCE) $(VMLINUX_H)
 	@echo "[+] eBPF 程序编译完成"
 
 # 编译 Go 程序
-.PHONY: go
+.PHONY: go FORCE
 go: $(GO_BINARY)
 
-$(GO_BINARY): $(GO_SRC_DIR)/*.go $(BPF_OBJECT)
+$(GO_BINARY): $(BPF_OBJECT) FORCE
 	@echo "编译 Go 程序..."
 	cd $(GO_SRC_DIR) && $(GO) mod tidy
 	cd $(GO_SRC_DIR) && $(GO) build $(GO_FLAGS) -o ../../$(GO_BINARY) .
 	@echo "[+] Go 程序编译完成"
+
+FORCE:
 
 # 安装依赖
 .PHONY: deps
@@ -129,7 +131,7 @@ uninstall:
 package: all
 	@echo "打包发布版本..."
 	@mkdir -p $(BUILD_DIR)/package/etracee-$(VERSION)
-	@cp -r $(BIN_DIR) $(CONFIG_DIR) $(SCRIPTS_DIR) README.md $(BUILD_DIR)/package/etracee-$(VERSION)/
+	@cp -r $(BIN_DIR) $(CONFIG_DIR) $(SCRIPTS_DIR) README.md docs $(BUILD_DIR)/package/etracee-$(VERSION)/
 	@cd $(BUILD_DIR)/package && tar -czf etracee-$(VERSION).tar.gz etracee-$(VERSION)
 	@echo "[+] 打包完成: $(BUILD_DIR)/package/etracee-$(VERSION).tar.gz"
 

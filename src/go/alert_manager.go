@@ -15,104 +15,104 @@ import (
 
 // AlertManager 告警管理器
 type AlertManager struct {
-    // 告警存储
-    activeAlerts    map[string]*ManagedAlert
-    alertHistory    []ManagedAlert
+	// 告警存储
+	activeAlerts map[string]*ManagedAlert
+	alertHistory []ManagedAlert
 
-    // 告警配置
-    config          *AlertManagerConfig
+	// 告警配置
+	config *AlertManagerConfig
 
-    // 告警处理器
-    processors      map[string]AlertProcessor
+	// 告警处理器
+	processors map[string]AlertProcessor
 
-    // 统计信息
-    stats           *AlertStats
+	// 统计信息
+	stats *AlertStats
 
-    // 同步控制
-    mutex           sync.RWMutex
+	// 同步控制
+	mutex sync.RWMutex
 
-    // 通知渠道
-    notificationChannels map[string]NotificationChannel
+	// 通知渠道
+	notificationChannels map[string]NotificationChannel
 
-    // 外部存储（可选）
-    storage         Storage
+	// 外部存储（可选）
+	storage Storage
 }
 
 // ManagedAlert 管理的告警
 type ManagedAlert struct {
 	AlertEvent
-	
+
 	// 唯一标识
-	ID              string        `json:"id"`
-	
+	ID string `json:"id"`
+
 	// 管理信息
-	Status          AlertStatus   `json:"status"`
-	CreatedAt       time.Time     `json:"created_at"`
-	UpdatedAt       time.Time     `json:"updated_at"`
-	AcknowledgedAt  *time.Time    `json:"acknowledged_at,omitempty"`
-	ResolvedAt      *time.Time    `json:"resolved_at,omitempty"`
-	
+	Status         AlertStatus `json:"status"`
+	CreatedAt      time.Time   `json:"created_at"`
+	UpdatedAt      time.Time   `json:"updated_at"`
+	AcknowledgedAt *time.Time  `json:"acknowledged_at,omitempty"`
+	ResolvedAt     *time.Time  `json:"resolved_at,omitempty"`
+
 	// 处理信息
-	AssignedTo      string        `json:"assigned_to,omitempty"`
-	ProcessingNotes []string      `json:"processing_notes,omitempty"`
-	
+	AssignedTo      string   `json:"assigned_to,omitempty"`
+	ProcessingNotes []string `json:"processing_notes,omitempty"`
+
 	// 关联信息
-	RelatedAlerts   []string      `json:"related_alerts,omitempty"`
-	AttackChainID   string        `json:"attack_chain_id,omitempty"`
-	
+	RelatedAlerts []string `json:"related_alerts,omitempty"`
+	AttackChainID string   `json:"attack_chain_id,omitempty"`
+
 	// 响应动作执行状态
-	ActionResults   map[string]ActionResult `json:"action_results,omitempty"`
-	
+	ActionResults map[string]ActionResult `json:"action_results,omitempty"`
+
 	// 分类和攻击技术信息
-	Category        string                  `json:"category"`
-	MitreAttack     *MITRETechnique         `json:"mitre_attack,omitempty"`
+	Category    string          `json:"category"`
+	MitreAttack *MITRETechnique `json:"mitre_attack,omitempty"`
 }
 
 // AlertStatus 告警状态
 type AlertStatus string
 
 const (
-	AlertStatusNew          AlertStatus = "new"
-	AlertStatusAcknowledged AlertStatus = "acknowledged"
-	AlertStatusInProgress   AlertStatus = "in_progress"
-	AlertStatusResolved     AlertStatus = "resolved"
+	AlertStatusNew           AlertStatus = "new"
+	AlertStatusAcknowledged  AlertStatus = "acknowledged"
+	AlertStatusInProgress    AlertStatus = "in_progress"
+	AlertStatusResolved      AlertStatus = "resolved"
 	AlertStatusFalsePositive AlertStatus = "false_positive"
-	AlertStatusSuppressed   AlertStatus = "suppressed"
+	AlertStatusSuppressed    AlertStatus = "suppressed"
 )
 
 // ActionResult 动作执行结果
 type ActionResult struct {
-	Action      string    `json:"action"`
-	Status      string    `json:"status"`
-	Message     string    `json:"message"`
-	ExecutedAt  time.Time `json:"executed_at"`
-	Duration    time.Duration `json:"duration"`
-	Error       string    `json:"error,omitempty"`
+	Action     string        `json:"action"`
+	Status     string        `json:"status"`
+	Message    string        `json:"message"`
+	ExecutedAt time.Time     `json:"executed_at"`
+	Duration   time.Duration `json:"duration"`
+	Error      string        `json:"error,omitempty"`
 }
 
 // AlertManagerConfig 告警管理器配置
 type AlertManagerConfig struct {
 	// 告警保留策略
-	MaxActiveAlerts     int           `yaml:"max_active_alerts"`
-	MaxHistoryAlerts    int           `yaml:"max_history_alerts"`
-	AlertRetentionDays  int           `yaml:"alert_retention_days"`
-	
+	MaxActiveAlerts    int `yaml:"max_active_alerts"`
+	MaxHistoryAlerts   int `yaml:"max_history_alerts"`
+	AlertRetentionDays int `yaml:"alert_retention_days"`
+
 	// 告警聚合配置
-	EnableAggregation   bool          `yaml:"enable_aggregation"`
-	AggregationWindow   time.Duration `yaml:"aggregation_window"`
-	AggregationThreshold int          `yaml:"aggregation_threshold"`
-	
+	EnableAggregation    bool          `yaml:"enable_aggregation"`
+	AggregationWindow    time.Duration `yaml:"aggregation_window"`
+	AggregationThreshold int           `yaml:"aggregation_threshold"`
+
 	// 自动处理配置
-	EnableAutoResolve   bool          `yaml:"enable_auto_resolve"`
-	AutoResolveTimeout  time.Duration `yaml:"auto_resolve_timeout"`
-	
+	EnableAutoResolve  bool          `yaml:"enable_auto_resolve"`
+	AutoResolveTimeout time.Duration `yaml:"auto_resolve_timeout"`
+
 	// 通知配置
 	EnableNotifications bool          `yaml:"enable_notifications"`
 	NotificationDelay   time.Duration `yaml:"notification_delay"`
-	
+
 	// 存储配置
-	PersistAlerts       bool          `yaml:"persist_alerts"`
-	AlertStoragePath    string        `yaml:"alert_storage_path"`
+	PersistAlerts    bool   `yaml:"persist_alerts"`
+	AlertStoragePath string `yaml:"alert_storage_path"`
 }
 
 // AlertProcessor 告警处理器接口
@@ -129,14 +129,14 @@ type NotificationChannel interface {
 
 // AlertStats 告警统计
 type AlertStats struct {
-	TotalAlerts         uint64            `json:"total_alerts"`
-	ActiveAlerts        uint64            `json:"active_alerts"`
-	ResolvedAlerts      uint64            `json:"resolved_alerts"`
-	FalsePositives      uint64            `json:"false_positives"`
-	SeverityDistribution map[string]uint64 `json:"severity_distribution"`
-	CategoryDistribution map[string]uint64 `json:"category_distribution"`
-	AverageResolutionTime time.Duration   `json:"average_resolution_time"`
-	LastResetTime       time.Time         `json:"last_reset_time"`
+	TotalAlerts           uint64            `json:"total_alerts"`
+	ActiveAlerts          uint64            `json:"active_alerts"`
+	ResolvedAlerts        uint64            `json:"resolved_alerts"`
+	FalsePositives        uint64            `json:"false_positives"`
+	SeverityDistribution  map[string]uint64 `json:"severity_distribution"`
+	CategoryDistribution  map[string]uint64 `json:"category_distribution"`
+	AverageResolutionTime time.Duration     `json:"average_resolution_time"`
+	LastResetTime         time.Time         `json:"last_reset_time"`
 }
 
 // NewAlertManager 创建告警管理器
@@ -153,21 +153,21 @@ func NewAlertManager(config *AlertManagerConfig) *AlertManager {
 			AutoResolveTimeout:   24 * time.Hour,
 			EnableNotifications:  true,
 			NotificationDelay:    30 * time.Second,
-			PersistAlerts:       true,
-			AlertStoragePath:    "data/alerts",
+			PersistAlerts:        true,
+			AlertStoragePath:     "data/alerts",
 		}
 	}
 
 	am := &AlertManager{
 		activeAlerts:         make(map[string]*ManagedAlert),
 		alertHistory:         make([]ManagedAlert, 0),
-		config:              config,
-		processors:          make(map[string]AlertProcessor),
+		config:               config,
+		processors:           make(map[string]AlertProcessor),
 		notificationChannels: make(map[string]NotificationChannel),
 		stats: &AlertStats{
 			SeverityDistribution: make(map[string]uint64),
 			CategoryDistribution: make(map[string]uint64),
-			LastResetTime:       time.Now(),
+			LastResetTime:        time.Now(),
 		},
 	}
 
@@ -188,7 +188,7 @@ func NewAlertManager(config *AlertManagerConfig) *AlertManager {
 
 // SetStorage 注入外部存储
 func (am *AlertManager) SetStorage(storage Storage) {
-    am.storage = storage
+	am.storage = storage
 }
 
 // ProcessAlert 处理告警事件
@@ -239,7 +239,7 @@ func (am *AlertManager) ProcessAlert(alertEvent AlertEvent) (*ManagedAlert, erro
 		go am.persistAlert(managedAlert)
 	}
 
-	log.Printf("告警已处理: ID=%s, 规则=%s, 严重级别=%s", 
+	log.Printf("告警已处理: ID=%s, 规则=%s, 严重级别=%s",
 		managedAlert.ID, managedAlert.RuleName, managedAlert.Severity)
 
 	return managedAlert, nil
@@ -247,8 +247,8 @@ func (am *AlertManager) ProcessAlert(alertEvent AlertEvent) (*ManagedAlert, erro
 
 // AcknowledgeAlert 确认告警
 func (am *AlertManager) AcknowledgeAlert(alertID, acknowledgedBy string) error {
-    am.mutex.Lock()
-    defer am.mutex.Unlock()
+	am.mutex.Lock()
+	defer am.mutex.Unlock()
 
 	alert, exists := am.activeAlerts[alertID]
 	if !exists {
@@ -259,19 +259,19 @@ func (am *AlertManager) AcknowledgeAlert(alertID, acknowledgedBy string) error {
 	alert.Status = AlertStatusAcknowledged
 	alert.AcknowledgedAt = &now
 	alert.UpdatedAt = now
-    alert.AssignedTo = acknowledgedBy
+	alert.AssignedTo = acknowledgedBy
 
-    // 持久化最新状态（acknowledged），确保统计与列表一致
-    go am.persistAlert(alert)
+	// 持久化最新状态（acknowledged），确保统计与列表一致
+	go am.persistAlert(alert)
 
-    log.Printf("告警已确认: ID=%s, 确认人=%s", alertID, acknowledgedBy)
-    return nil
+	log.Printf("告警已确认: ID=%s, 确认人=%s", alertID, acknowledgedBy)
+	return nil
 }
 
 // ResolveAlert 解决告警
 func (am *AlertManager) ResolveAlert(alertID, resolvedBy, notes string) error {
-    am.mutex.Lock()
-    defer am.mutex.Unlock()
+	am.mutex.Lock()
+	defer am.mutex.Unlock()
 
 	alert, exists := am.activeAlerts[alertID]
 	if !exists {
@@ -282,19 +282,19 @@ func (am *AlertManager) ResolveAlert(alertID, resolvedBy, notes string) error {
 	alert.Status = AlertStatusResolved
 	alert.ResolvedAt = &now
 	alert.UpdatedAt = now
-    alert.AssignedTo = resolvedBy
+	alert.AssignedTo = resolvedBy
 
-    if notes != "" {
-        alert.ProcessingNotes = append(alert.ProcessingNotes, 
-            fmt.Sprintf("[%s] %s: %s", now.Format("2006-01-02 15:04:05"), resolvedBy, notes))
-    }
+	if notes != "" {
+		alert.ProcessingNotes = append(alert.ProcessingNotes,
+			fmt.Sprintf("[%s] %s: %s", now.Format("2006-01-02 15:04:05"), resolvedBy, notes))
+	}
 
-    // 持久化最新状态（resolved）
-    go am.persistAlert(alert)
+	// 持久化最新状态（resolved）
+	go am.persistAlert(alert)
 
-    // 移动到历史记录
-    am.alertHistory = append(am.alertHistory, *alert)
-    delete(am.activeAlerts, alertID)
+	// 移动到历史记录
+	am.alertHistory = append(am.alertHistory, *alert)
+	delete(am.activeAlerts, alertID)
 
 	// 更新统计
 	am.stats.ResolvedAlerts++
@@ -335,7 +335,7 @@ func (am *AlertManager) GetAlertStats() *AlertStats {
 	if am.stats.ResolvedAlerts > 0 {
 		totalResolutionTime := time.Duration(0)
 		count := 0
-		
+
 		for _, alert := range am.alertHistory {
 			if alert.ResolvedAt != nil {
 				resolutionTime := alert.ResolvedAt.Sub(alert.CreatedAt)
@@ -343,7 +343,7 @@ func (am *AlertManager) GetAlertStats() *AlertStats {
 				count++
 			}
 		}
-		
+
 		if count > 0 {
 			stats.AverageResolutionTime = totalResolutionTime / time.Duration(count)
 		}
@@ -417,40 +417,40 @@ func (am *AlertManager) executeActions(alert *ManagedAlert) {
 
 func (am *AlertManager) findSimilarAlert(newAlert *ManagedAlert) *ManagedAlert {
 	cutoffTime := time.Now().Add(-am.config.AggregationWindow)
-	
+
 	for _, alert := range am.activeAlerts {
 		if alert.CreatedAt.Before(cutoffTime) {
 			continue
 		}
-		
+
 		// 检查相似性：相同规则、相同进程、相同用户
 		if alert.RuleName == newAlert.RuleName &&
-		   alert.Event.Comm == newAlert.Event.Comm &&
-		   alert.Event.UID == newAlert.Event.UID {
+			alert.Event.Comm == newAlert.Event.Comm &&
+			alert.Event.UID == newAlert.Event.UID {
 			return alert
 		}
 	}
-	
+
 	return nil
 }
 
 func (am *AlertManager) aggregateAlert(existingAlert, newAlert *ManagedAlert) (*ManagedAlert, error) {
 	existingAlert.UpdatedAt = time.Now()
-	
+
 	// 添加处理注释
 	note := fmt.Sprintf("聚合告警: 相似事件在 %s 再次发生", newAlert.CreatedAt.Format("15:04:05"))
 	existingAlert.ProcessingNotes = append(existingAlert.ProcessingNotes, note)
-	
-	log.Printf("告警已聚合: 现有ID=%s, 新事件时间=%s", 
+
+	log.Printf("告警已聚合: 现有ID=%s, 新事件时间=%s",
 		existingAlert.ID, newAlert.CreatedAt.Format("15:04:05"))
-	
+
 	return existingAlert, nil
 }
 
 func (am *AlertManager) sendNotifications(alert *ManagedAlert) {
 	// 延迟发送通知（避免误报）
 	time.Sleep(am.config.NotificationDelay)
-	
+
 	for _, channel := range am.notificationChannels {
 		if err := channel.SendNotification(alert); err != nil {
 			log.Printf("通知发送失败 [%s]: %v", channel.GetChannelName(), err)
@@ -469,15 +469,15 @@ func generateAlertID() string {
 }
 
 func (am *AlertManager) persistAlert(alert *ManagedAlert) {
-    // 同步写入外部存储（如可用）
-    if am.storage != nil {
-        if err := am.storage.SaveAlert(alert); err != nil {
-            log.Printf("保存告警到存储失败: %v", err)
-        }
-    }
-    if am.config.AlertStoragePath == "" {
-        return
-    }
+	// 同步写入外部存储（如可用）
+	if am.storage != nil {
+		if err := am.storage.SaveAlert(alert); err != nil {
+			log.Printf("保存告警到存储失败: %v", err)
+		}
+	}
+	if am.config.AlertStoragePath == "" {
+		return
+	}
 
 	// 确保目录存在
 	if err := os.MkdirAll(am.config.AlertStoragePath, 0755); err != nil {
@@ -486,7 +486,7 @@ func (am *AlertManager) persistAlert(alert *ManagedAlert) {
 	}
 
 	// 生成文件名
-	filename := fmt.Sprintf("alert_%s_%s.json", 
+	filename := fmt.Sprintf("alert_%s_%s.json",
 		alert.CreatedAt.Format("20060102"), alert.ID)
 	filepath := filepath.Join(am.config.AlertStoragePath, filename)
 
@@ -565,7 +565,7 @@ func (am *AlertManager) cleanupExpiredAlerts() {
 	defer am.mutex.Unlock()
 
 	cutoffTime := time.Now().AddDate(0, 0, -am.config.AlertRetentionDays)
-	
+
 	// 清理历史告警
 	newHistory := make([]ManagedAlert, 0)
 	for _, alert := range am.alertHistory {
@@ -573,42 +573,42 @@ func (am *AlertManager) cleanupExpiredAlerts() {
 			newHistory = append(newHistory, alert)
 		}
 	}
-	
+
 	removed := len(am.alertHistory) - len(newHistory)
 	am.alertHistory = newHistory
-	
+
 	if removed > 0 {
 		log.Printf("已清理 %d 个过期历史告警", removed)
 	}
 }
 
 func (am *AlertManager) autoResolveTimeoutAlerts() {
-    am.mutex.Lock()
-    defer am.mutex.Unlock()
+	am.mutex.Lock()
+	defer am.mutex.Unlock()
 
 	cutoffTime := time.Now().Add(-am.config.AutoResolveTimeout)
 	resolvedCount := 0
-	
-	for id, alert := range am.activeAlerts {
-        if alert.CreatedAt.Before(cutoffTime) && alert.Status == AlertStatusNew {
-            now := time.Now()
-            alert.Status = AlertStatusResolved
-            alert.ResolvedAt = &now
-            alert.UpdatedAt = now
-            alert.ProcessingNotes = append(alert.ProcessingNotes, 
-                fmt.Sprintf("[%s] 系统: 自动解决超时告警", now.Format("2006-01-02 15:04:05")))
-            
-            // 持久化最新状态（resolved）
-            go am.persistAlert(alert)
 
-            // 移动到历史记录
-            am.alertHistory = append(am.alertHistory, *alert)
-            delete(am.activeAlerts, id)
-            
-            resolvedCount++
-        }
-    }
-	
+	for id, alert := range am.activeAlerts {
+		if alert.CreatedAt.Before(cutoffTime) && alert.Status == AlertStatusNew {
+			now := time.Now()
+			alert.Status = AlertStatusResolved
+			alert.ResolvedAt = &now
+			alert.UpdatedAt = now
+			alert.ProcessingNotes = append(alert.ProcessingNotes,
+				fmt.Sprintf("[%s] 系统: 自动解决超时告警", now.Format("2006-01-02 15:04:05")))
+
+			// 持久化最新状态（resolved）
+			go am.persistAlert(alert)
+
+			// 移动到历史记录
+			am.alertHistory = append(am.alertHistory, *alert)
+			delete(am.activeAlerts, id)
+
+			resolvedCount++
+		}
+	}
+
 	if resolvedCount > 0 {
 		log.Printf("自动解决了 %d 个超时告警", resolvedCount)
 	}

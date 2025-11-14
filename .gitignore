@@ -1,12 +1,17 @@
 # 构建产物
 build/
+bin/
 *.o
 *.so
 *.a
+*.exe
 
 # Go 相关
-src/go/go.sum
 vendor/
+
+# 运行数据
+data/*
+!data/.gitkeep
 
 # Python 相关
 __pycache__/
@@ -44,6 +49,11 @@ logs/
 Thumbs.db
 
 # 配置文件（可能包含敏感信息）
-config/*.yaml
-config/*.json
-!config/example.*
+*.env
+config/*.local.yaml
+config/*.secret.yaml
+config/*.override.yaml
+
+# 数据库/缓存
+*.sqlite
+*.db

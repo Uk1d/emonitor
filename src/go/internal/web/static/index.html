@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>eTracee 安全监控</title>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <style>
+        :root { --bg: #0f172a; --panel: #111827; --text: #e5e7eb; --muted: #9ca3af; --accent: #3b82f6; --danger: #ef4444; --warn: #f59e0b; --success: #10b981; --border: #1f2937; }
+        [data-theme="light"] { --bg: #f6f7fb; --panel: #ffffff; --text: #111827; --muted: #6b7280; --accent: #2563eb; --danger: #dc2626; --warn: #d97706; --success: #059669; --border: #e5e7eb; }
+        html, body { height: 100%; }
+        body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif; }
+        .navbar { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border); background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0)); position: sticky; top: 0; backdrop-filter: blur(6px); }
+        .brand { font-weight: 700; letter-spacing: .3px; color: var(--text); }
+        .controls { display: flex; gap: 12px; align-items: center; }
+        .status { display: flex; gap: 8px; align-items: center; font-size: 14px; color: var(--muted); }
+        .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 4px rgba(245, 158, 11, .15); }
+        .dot.ok { background: var(--success); box-shadow: 0 0 0 4px rgba(16, 185, 129, .12); }
+        .dot.err { background: var(--danger); box-shadow: 0 0 0 4px rgba(220, 38, 38, .12); }
+        .toggle { border: 1px solid var(--border); padding: 6px 10px; border-radius: 8px; background: var(--panel); color: var(--text); font-size: 13px; }
+        .page { max-width: 1200px; margin: 0 auto; padding: 18px; }
+        .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+        .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+        .card .title { font-size: 12px; color: var(--muted); }
+        .card .value { font-size: 26px; margin-top: 8px; font-weight: 700; color: var(--text); }
+        .section { margin-top: 18px; }
+        .section h2 { margin: 0 0 10px; font-size: 16px; color: var(--muted); }
+        .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 0; overflow: hidden; }
+        .panel.scroll { max-height: 320px; overflow: auto; }
+        .table { width: 100%; border-collapse: collapse; }
+        .table th, .table td { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+        .table th { position: sticky; top: 0; background: var(--panel); color: var(--muted); text-align: left; z-index: 1; }
+        .table tr:hover td { background: rgba(59, 130, 246, .06); }
+        .pill { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 999px; font-size: 12px; }
+        .pill.warn { background: rgba(245, 158, 11, .18); color: var(--warn); }
+        .pill.danger { background: rgba(239, 68, 68, .18); color: var(--danger); }
+        .pill.success { background: rgba(16, 185, 129, .18); color: var(--success); }
+        .pill.neutral { background: rgba(156, 163, 175, .18); color: var(--muted); }
+        #graph { width: 100%; height: 520px; border: 1px dashed var(--border); border-radius: 12px; background: var(--panel); }
+        @media (max-width: 960px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } .table th, .table td { padding: 8px 10px; } }
+    </style>
+</head>
+<body data-theme="dark">
+    <div class="navbar">
+        <div class="brand">eTracee 安全监控</div>
+        <div class="controls">
+            <div class="status"><div id="ws-dot" class="dot"></div><span id="ws-text">连接中</span></div>
+            <button id="theme-toggle" class="toggle">主题</button>
+        </div>
+    </div>
+    <div class="page">
+        <div class="grid">
+            <div class="card"><div class="title">总告警数</div><div id="total-alerts" class="value">0</div></div>
+            <div class="card"><div class="title">活跃告警</div><div id="active-alerts" class="value">0</div></div>
+            <div class="card"><div class="title">已解决</div><div id="resolved-alerts" class="value">0</div></div>
+            <div class="card"><div class="title">误报</div><div id="false-positive-alerts" class="value">0</div></div>
+        </div>
+        <div class="section">
+            <h2>最新告警</h2>
+            <div class="panel scroll">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>规则</th>
+                            <th>严重性</th>
+                            <th>状态</th>
+                            <th>时间</th>
+                        </tr>
+                    </thead>
+                    <tbody id="alerts-tbody"></tbody>
+                </table>
+            </div>
+        </div>
+        <div class="section">
+            <h2>最新事件流</h2>
+            <div class="panel scroll">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>时间</th>
+                            <th>类型</th>
+                            <th>PID</th>
+                            <th>Comm</th>
+                            <th>文件</th>
+                            <th>源地址</th>
+                            <th>目标地址</th>
+                        </tr>
+                    </thead>
+                    <tbody id="events-tbody"></tbody>
+                </table>
+            </div>
+        </div>
+        <div class="section">
+            <h2>实时图谱</h2>
+            <div id="graph"></div>
+        </div>
+    </div>
+    <script>
+        const themeKey = 'ETRACEE_THEME';
+        const tokenKey = 'ETRACEE_TOKEN';
+        const dot = document.getElementById('ws-dot');
+        const text = document.getElementById('ws-text');
+        const alertsTbody = document.getElementById('alerts-tbody');
+        const eventsTbody = document.getElementById('events-tbody');
+        const totalAlertsSpan = document.getElementById('total-alerts');
+        const activeAlertsSpan = document.getElementById('active-alerts');
+        const resolvedAlertsSpan = document.getElementById('resolved-alerts');
+        const falsePositiveAlertsSpan = document.getElementById('false-positive-alerts');
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token') || window.localStorage.getItem(tokenKey) || '';
+        const theme = window.localStorage.getItem(themeKey) || 'dark';
+        document.body.setAttribute('data-theme', theme);
+        document.getElementById('theme-toggle').addEventListener('click', function() { const next = document.body.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'; document.body.setAttribute('data-theme', next); window.localStorage.setItem(themeKey, next); });
+        const graphEl = document.getElementById('graph');
+        let graphWidth = graphEl ? graphEl.clientWidth : 0;
+        const graphHeight = 520;
+        const hasD3 = typeof window.d3 !== 'undefined';
+        let svg = null;
+        let linkGroup = null;
+        let nodeGroup = null;
+        let simulation = null;
+        if (hasD3) {
+            svg = d3.select('#graph').append('svg').attr('width', graphWidth).attr('height', graphHeight).attr('viewBox', `0 0 ${graphWidth} ${graphHeight}`).attr('preserveAspectRatio', 'xMidYMid meet');
+            linkGroup = svg.append('g');
+            nodeGroup = svg.append('g');
+            simulation = d3.forceSimulation()
+                .force('link', d3.forceLink().id(d => d.id).distance(80))
+                .force('charge', d3.forceManyBody().strength(-30))
+                .force('center', d3.forceCenter(graphWidth/2, graphHeight/2))
+                .force('x', d3.forceX(graphWidth/2).strength(0.05))
+                .force('y', d3.forceY(graphHeight/2).strength(0.05))
+                .force('collide', d3.forceCollide(18));
+        }
+        const nodeIndex = new Map();
+        const linkIndex = new Map();
+        const maxAlertRows = 50;
+        const maxEventRows = 100;
+        let renderScheduled = false;
+        const scheduleRender = function() { if (renderScheduled) return; renderScheduled = true; setTimeout(function(){ renderScheduled = false; renderGraph(); }, 500); };
+        function applyGraphUpdate(update) { const nodes = (update && update.nodes) || []; const edges = (update && update.edges) || []; for (const n of nodes) { const ex = nodeIndex.get(n.id); if (ex) { Object.assign(ex, n); ex.count = (ex.count || 0) + 1; } else { nodeIndex.set(n.id, { ...n, count: 1 }); } } for (const e of edges) { const s = e.source || e.src || e.from; const t = e.target || e.dst || e.to; const key = s + '|' + t + '|' + (e.type || ''); const ex = linkIndex.get(key); if (ex) { Object.assign(ex, e); ex.id = key; ex.count = (ex.count || 0) + 1; } else { linkIndex.set(key, { ...e, id: key, count: 1, source: s, target: t }); } } }
+        function renderGraph() { if (!hasD3 || !svg) { return; } const nodes = Array.from(nodeIndex.values()); const links = Array.from(linkIndex.values()); const linkSel = linkGroup.selectAll('line').data(links, d => d.id); linkSel.exit().remove(); linkSel.enter().append('line').attr('stroke', '#566').attr('stroke-width', d => Math.min(4, 1 + (d.count || 1)/10)); const nodeSel = nodeGroup.selectAll('circle').data(nodes, d => d.id); nodeSel.exit().remove(); const nodeEnter = nodeSel.enter().append('circle').attr('r', 8).attr('fill', d => colorByType(d.type)).call(drag(simulation)); nodeEnter.append('title').text(d => d.label || d.id); nodeSel.merge(nodeEnter); const margin = 20; simulation.nodes(nodes).on('tick', () => { nodeGroup.selectAll('circle').attr('cx', d => { d.x = Math.max(margin, Math.min(graphWidth - margin, d.x)); return d.x; }).attr('cy', d => { d.y = Math.max(margin, Math.min(graphHeight - margin, d.y)); return d.y; }); linkGroup.selectAll('line').attr('x1', d => Math.max(margin, Math.min(graphWidth - margin, d.source.x))).attr('y1', d => Math.max(margin, Math.min(graphHeight - margin, d.source.y))).attr('x2', d => Math.max(margin, Math.min(graphWidth - margin, d.target.x))).attr('y2', d => Math.max(margin, Math.min(graphHeight - margin, d.target.y))); }); simulation.force('link').links(links); simulation.alphaTarget(0.05).restart(); setTimeout(function(){ simulation.alphaTarget(0); }, 300); }
+        function colorByType(t) { switch (t) { case 'process': return '#3b82f6'; case 'file': return '#10b981'; case 'network': return '#ef4444'; case 'attack_chain': return '#a78bfa'; case 'alert': return '#f59e0b'; default: return '#9ca3af'; } }
+        function drag(sim) { if (!hasD3 || !sim) { return function(sel){ return sel; }; } function dragstarted(event, d) { if (!event.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; } function dragged(event, d) { d.fx = event.x; d.fy = event.y; } function dragended(event, d) { if (!event.active) sim.alphaTarget(0); d.fx = null; d.fy = null; } return d3.drag().on('start', dragstarted).on('drag', dragged).on('end', dragended); }
+        function connect() {
+            const proto = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+            const wsURL = proto + window.location.host + '/ws' + (token ? ('?token=' + encodeURIComponent(token)) : '');
+            const protocols = token ? ['Bearer ' + token, token] : [];
+            const ws = new WebSocket(wsURL, protocols);
+            ws.onopen = function() {
+                dot.classList.remove('err');
+                dot.classList.add('ok');
+                text.textContent = '已连接';
+            };
+            ws.onmessage = function(event) {
+                const message = JSON.parse(event.data);
+                if (message.type === 'stats') { updateStats(message.data); }
+                else if (message.type === 'alert') { addAlert(message.data); }
+                else if (message.type === 'event') { addEvent(message.data); }
+                else if (message.type === 'graph_update') { applyGraphUpdate(message.data); scheduleRender(); }
+            };
+            ws.onclose = function() {
+                dot.classList.remove('ok');
+                dot.classList.add('err');
+                text.textContent = '已断开，重连中';
+                setTimeout(connect, 3000);
+            };
+            ws.onerror = function() {
+                dot.classList.remove('ok');
+                dot.classList.add('err');
+                text.textContent = '连接错误';
+                ws.close();
+            };
+        }
+        function updateStats(stats) { totalAlertsSpan.textContent = stats.total_alerts || 0; activeAlertsSpan.textContent = stats.active_alerts || 0; resolvedAlertsSpan.textContent = stats.resolved_alerts || 0; falsePositiveAlertsSpan.textContent = stats.false_positives || 0; }
+        function sevPill(sev) { const s = (sev || '').toLowerCase(); if (s === 'high' || s === 'critical') return 'pill danger'; if (s === 'medium') return 'pill warn'; if (s === 'low') return 'pill neutral'; return 'pill neutral'; }
+        function statusPill(st) { const s = (st || '').toLowerCase(); if (s === 'resolved') return 'pill success'; if (s === 'acknowledged') return 'pill warn'; if (s === 'false_positive') return 'pill neutral'; return 'pill danger'; }
+        function addAlert(alert) { const row = document.createElement('tr'); row.innerHTML = '<td>' + (alert.ID || alert.id || '') + '</td>' + '<td>' + (alert.RuleName || alert.rule_name || '') + '</td>' + '<td><span class="' + sevPill(alert.Severity || alert.severity) + '">' + (alert.Severity || alert.severity || '') + '</span></td>' + '<td><span class="' + statusPill(alert.Status || alert.status) + '">' + (alert.Status || alert.status || '') + '</span></td>' + '<td>' + new Date(alert.CreatedAt || alert.created_at || Date.now()).toLocaleString() + '</td>'; alertsTbody.insertBefore(row, alertsTbody.firstChild); if (alertsTbody.children.length > maxAlertRows) { alertsTbody.removeChild(alertsTbody.lastChild); } }
+        function addEvent(event) { const row = document.createElement('tr'); const src = event && event.src_addr ? (event.src_addr.ip + ':' + (event.src_addr.port || '')) : ''; const dst = event && event.dst_addr ? (event.dst_addr.ip + ':' + (event.dst_addr.port || '')) : ''; row.innerHTML = '<td>' + (event.timestamp || '') + '</td>' + '<td>' + (event.event_type || '') + '</td>' + '<td>' + (event.pid || '') + '</td>' + '<td>' + (event.comm || '') + '</td>' + '<td>' + (event.filename || '') + '</td>' + '<td>' + src + '</td>' + '<td>' + dst + '</td>'; eventsTbody.insertBefore(row, eventsTbody.firstChild); if (eventsTbody.children.length > maxEventRows) { eventsTbody.removeChild(eventsTbody.lastChild); } }
+        window.addEventListener('resize', function() { const w = graphEl.clientWidth; if (w !== graphWidth) { graphWidth = w; if (svg) { svg.attr('width', graphWidth).attr('viewBox', `0 0 ${graphWidth} ${graphHeight}`); if (simulation) { simulation.force('center', d3.forceCenter(graphWidth/2, graphHeight/2)); simulation.force('x', d3.forceX(graphWidth/2).strength(0.05)); simulation.force('y', d3.forceY(graphHeight/2).strength(0.05)); } } } });
+        window.addEventListener('load', function() { connect(); });
+    </script>
+</body>
+</html>

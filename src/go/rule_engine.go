@@ -431,10 +431,7 @@ func (e *EnhancedRuleEngine) MatchRules(event *EventJSON) []AlertEvent {
 					event.PID, event.Comm, category)
 			}
 			
-			// 更新匹配时间统计
-			if e.GlobalConfig.EnableRuleStats {
-				e.updateRuleStats(rule.Original.Name, ruleMatchTime)
-			}
+            // 保留性能记录，避免重复计数，不再二次更新规则统计
 		}
 	}
 	
