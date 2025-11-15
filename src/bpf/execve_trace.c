@@ -59,6 +59,17 @@ int trace_execve(struct trace_event_raw_sys_enter *ctx) {
     });
 }
 
+SEC("tracepoint/syscalls/sys_enter_execveat")
+int trace_execveat(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_PROC_EVENTS, EVENT_EXECVEAT, ctx, {
+        const char *pathname = (const char *)ctx->args[1];
+        if (pathname) {
+            bpf_probe_read_user_str(e->filename, sizeof(e->filename), pathname);
+        }
+        e->flags = (u32)ctx->args[4];
+    });
+}
+
 /*
  * fork系统调用跟踪函数
  * 

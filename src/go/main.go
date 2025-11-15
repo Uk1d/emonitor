@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,10 +32,11 @@ type EventType uint32
 
 const (
 	// 进程相关事件
-	EventExecve EventType = 1
-	EventFork   EventType = 2
-	EventClone  EventType = 3
-	EventExit   EventType = 4
+	EventExecve   EventType = 1
+	EventFork     EventType = 2
+	EventClone    EventType = 3
+	EventExit     EventType = 4
+	EventExecveat EventType = 5
 
 	// 文件系统相关事件
 	EventOpenat EventType = 10
@@ -53,6 +55,8 @@ const (
 	EventAccept   EventType = 23
 	EventSendto   EventType = 24
 	EventRecvfrom EventType = 25
+	EventSocket   EventType = 26
+	EventShutdown EventType = 27
 
 	// 权限相关事件
 	EventSetuid    EventType = 30
@@ -61,11 +65,15 @@ const (
 	EventSetregid  EventType = 33
 	EventSetresuid EventType = 34
 	EventSetresgid EventType = 35
+	EventSetns     EventType = 36
+	EventUnshare   EventType = 37
+	EventPrctl     EventType = 38
 
 	// 内存相关事件
 	EventMmap     EventType = 40
 	EventMprotect EventType = 41
 	EventMunmap   EventType = 42
+	EventMremap   EventType = 43
 
 	// 模块相关事件
 	EventInitModule   EventType = 50
@@ -166,6 +174,8 @@ func (et EventType) String() string {
 		return "clone"
 	case EventExit:
 		return "exit"
+	case EventExecveat:
+		return "execveat"
 	// 文件系统相关
 	case EventOpenat:
 		return "openat"
@@ -196,6 +206,10 @@ func (et EventType) String() string {
 		return "sendto"
 	case EventRecvfrom:
 		return "recvfrom"
+	case EventSocket:
+		return "socket"
+	case EventShutdown:
+		return "shutdown"
 	// 权限相关
 	case EventSetuid:
 		return "setuid"
@@ -209,6 +223,12 @@ func (et EventType) String() string {
 		return "setresuid"
 	case EventSetresgid:
 		return "setresgid"
+	case EventSetns:
+		return "setns"
+	case EventUnshare:
+		return "unshare"
+	case EventPrctl:
+		return "prctl"
 	// 内存相关
 	case EventMmap:
 		return "mmap"
@@ -216,6 +236,8 @@ func (et EventType) String() string {
 		return "mprotect"
 	case EventMunmap:
 		return "munmap"
+	case EventMremap:
+		return "mremap"
 	// 模块相关
 	case EventInitModule:
 		return "init_module"
@@ -237,11 +259,48 @@ func (et EventType) String() string {
 
 // 字节数组转字符串
 func bytesToString(b []byte) string {
-	n := bytes.IndexByte(b, 0)
-	if n == -1 {
-		n = len(b)
-	}
-	return string(b[:n])
+    n := bytes.IndexByte(b, 0)
+    if n == -1 {
+        n = len(b)
+    }
+    return string(b[:n])
+}
+
+func parseRawEvent(b []byte) (*RawEvent, error) {
+    if len(b) < 428 {
+        return nil, fmt.Errorf("invalid event size: %d", len(b))
+    }
+    e := &RawEvent{}
+    e.Timestamp = binary.LittleEndian.Uint64(b[0:8])
+    e.PID = binary.LittleEndian.Uint32(b[8:12])
+    e.PPID = binary.LittleEndian.Uint32(b[12:16])
+    e.UID = binary.LittleEndian.Uint32(b[16:20])
+    e.GID = binary.LittleEndian.Uint32(b[20:24])
+    e.SyscallID = binary.LittleEndian.Uint32(b[24:28])
+    e.EventType = binary.LittleEndian.Uint32(b[28:32])
+    e.RetCode = int32(binary.LittleEndian.Uint32(b[32:36]))
+    copy(e.Comm[:], b[36:52])
+    copy(e.Filename[:], b[52:308])
+    e.Mode = binary.LittleEndian.Uint32(b[308:312])
+    e.Size = binary.LittleEndian.Uint64(b[312:320])
+    e.Flags = binary.LittleEndian.Uint32(b[320:324])
+    e.SrcAddr.Family = binary.LittleEndian.Uint16(b[324:326])
+    e.SrcAddr.Port = binary.LittleEndian.Uint16(b[326:328])
+    copy(e.SrcAddr.Addr[:], b[328:344])
+    e.DstAddr.Family = binary.LittleEndian.Uint16(b[344:346])
+    e.DstAddr.Port = binary.LittleEndian.Uint16(b[346:348])
+    copy(e.DstAddr.Addr[:], b[348:364])
+    e.OldUID = binary.LittleEndian.Uint32(b[364:368])
+    e.OldGID = binary.LittleEndian.Uint32(b[368:372])
+    e.NewUID = binary.LittleEndian.Uint32(b[372:376])
+    e.NewGID = binary.LittleEndian.Uint32(b[376:380])
+    e.Addr = binary.LittleEndian.Uint64(b[384:392])
+    e.Len = binary.LittleEndian.Uint64(b[392:400])
+    e.Prot = binary.LittleEndian.Uint32(b[400:404])
+    copy(e.TargetComm[:], b[404:420])
+    e.TargetPID = binary.LittleEndian.Uint32(b[420:424])
+    e.Signal = binary.LittleEndian.Uint32(b[424:428])
+    return e, nil
 }
 
 // 内存保护标志转换
@@ -348,7 +407,7 @@ func convertToJSON(raw *RawEvent) *EventJSON {
 	// 网络地址：仅在网络类事件中输出，避免非网络事件出现误填字段
 	isNetEvent := false
 	switch event.EventType {
-	case "connect", "bind", "listen", "accept", "sendto", "recvfrom":
+	case "connect", "bind", "listen", "accept", "sendto", "recvfrom", "socket", "shutdown":
 		isNetEvent = true
 	}
 	if isNetEvent {
@@ -706,6 +765,12 @@ func main() {
 		configMap.Put(uint32(6), uint64(ruleEngine.GlobalConfig.MaxUIDFilter))
 	}
 
+	if pidMap := coll.Maps["pid_filter"]; pidMap != nil {
+		pid := uint32(os.Getpid())
+		var v uint8 = 1
+		_ = pidMap.Put(pid, v)
+	}
+
 	// 附加到 execve 系统调用跟踪点
 	execLink, err := link.Tracepoint("syscalls", "sys_enter_execve", coll.Programs["trace_execve"], nil)
 	if err != nil {
@@ -814,6 +879,216 @@ func main() {
 		defer killLink.Close()
 	}
 
+	// 新增网络与文件跟踪点
+	accept4Link, err := link.Tracepoint("syscalls", "sys_enter_accept4", coll.Programs["trace_accept4"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 accept4 跟踪点: %v", err)
+		accept4Link = nil
+	} else {
+		defer accept4Link.Close()
+	}
+
+	acceptLink, err := link.Tracepoint("syscalls", "sys_enter_accept", coll.Programs["trace_accept"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 accept 跟踪点: %v", err)
+		acceptLink = nil
+	} else {
+		defer acceptLink.Close()
+	}
+
+	sendtoLink, err := link.Tracepoint("syscalls", "sys_enter_sendto", coll.Programs["trace_sendto"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 sendto 跟踪点: %v", err)
+		sendtoLink = nil
+	} else {
+		defer sendtoLink.Close()
+	}
+
+	recvfromLink, err := link.Tracepoint("syscalls", "sys_enter_recvfrom", coll.Programs["trace_recvfrom"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 recvfrom 跟踪点: %v", err)
+		recvfromLink = nil
+	} else {
+		defer recvfromLink.Close()
+	}
+
+	readLink, err := link.Tracepoint("syscalls", "sys_exit_read", coll.Programs["trace_read"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 read 跟踪点: %v", err)
+		readLink = nil
+	} else {
+		defer readLink.Close()
+	}
+
+	writeLink, err := link.Tracepoint("syscalls", "sys_exit_write", coll.Programs["trace_write"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 write 跟踪点: %v", err)
+		writeLink = nil
+	} else {
+		defer writeLink.Close()
+	}
+
+	chownLink, err := link.Tracepoint("syscalls", "sys_enter_fchownat", coll.Programs["trace_chown"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 fchownat 跟踪点: %v", err)
+		chownLink = nil
+	} else {
+		defer chownLink.Close()
+	}
+
+	renameLink, err := link.Tracepoint("syscalls", "sys_enter_renameat2", coll.Programs["trace_rename"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 renameat2 跟踪点: %v", err)
+		renameLink = nil
+	} else {
+		defer renameLink.Close()
+	}
+
+	// 新增权限/系统/内存跟踪点
+	socketLink, err := link.Tracepoint("syscalls", "sys_enter_socket", coll.Programs["trace_socket"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 socket 跟踪点: %v", err)
+		socketLink = nil
+	} else {
+		defer socketLink.Close()
+	}
+
+	shutdownLink, err := link.Tracepoint("syscalls", "sys_enter_shutdown", coll.Programs["trace_shutdown"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 shutdown 跟踪点: %v", err)
+		shutdownLink = nil
+	} else {
+		defer shutdownLink.Close()
+	}
+
+	execveatLink, err := link.Tracepoint("syscalls", "sys_enter_execveat", coll.Programs["trace_execveat"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 execveat 跟踪点: %v", err)
+		execveatLink = nil
+	} else {
+		defer execveatLink.Close()
+	}
+
+	setuidLink, err := link.Tracepoint("syscalls", "sys_enter_setuid", coll.Programs["trace_setuid"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 setuid 跟踪点: %v", err)
+		setuidLink = nil
+	} else {
+		defer setuidLink.Close()
+	}
+
+	setgidLink, err := link.Tracepoint("syscalls", "sys_enter_setgid", coll.Programs["trace_setgid"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 setgid 跟踪点: %v", err)
+		setgidLink = nil
+	} else {
+		defer setgidLink.Close()
+	}
+
+	setreuidLink, err := link.Tracepoint("syscalls", "sys_enter_setreuid", coll.Programs["trace_setreuid"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 setreuid 跟踪点: %v", err)
+		setreuidLink = nil
+	} else {
+		defer setreuidLink.Close()
+	}
+
+	setregidLink, err := link.Tracepoint("syscalls", "sys_enter_setregid", coll.Programs["trace_setregid"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 setregid 跟踪点: %v", err)
+		setregidLink = nil
+	} else {
+		defer setregidLink.Close()
+	}
+
+	setresuidLink, err := link.Tracepoint("syscalls", "sys_enter_setresuid", coll.Programs["trace_setresuid"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 setresuid 跟踪点: %v", err)
+		setresuidLink = nil
+	} else {
+		defer setresuidLink.Close()
+	}
+
+	setresgidLink, err := link.Tracepoint("syscalls", "sys_enter_setresgid", coll.Programs["trace_setresgid"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 setresgid 跟踪点: %v", err)
+		setresgidLink = nil
+	} else {
+		defer setresgidLink.Close()
+	}
+
+	munmapLink, err := link.Tracepoint("syscalls", "sys_enter_munmap", coll.Programs["trace_munmap"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 munmap 跟踪点: %v", err)
+		munmapLink = nil
+	} else {
+		defer munmapLink.Close()
+	}
+
+	mountLink, err := link.Tracepoint("syscalls", "sys_enter_mount", coll.Programs["trace_mount"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 mount 跟踪点: %v", err)
+		mountLink = nil
+	} else {
+		defer mountLink.Close()
+	}
+
+	umountLink, err := link.Tracepoint("syscalls", "sys_enter_umount2", coll.Programs["trace_umount"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 umount 跟踪点: %v", err)
+		umountLink = nil
+	} else {
+		defer umountLink.Close()
+	}
+
+	initModuleLink, err := link.Tracepoint("syscalls", "sys_enter_init_module", coll.Programs["trace_init_module"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 init_module 跟踪点: %v", err)
+		initModuleLink = nil
+	} else {
+		defer initModuleLink.Close()
+	}
+
+	deleteModuleLink, err := link.Tracepoint("syscalls", "sys_enter_delete_module", coll.Programs["trace_delete_module"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 delete_module 跟踪点: %v", err)
+		deleteModuleLink = nil
+	} else {
+		defer deleteModuleLink.Close()
+	}
+
+	mremapLink, err := link.Tracepoint("syscalls", "sys_enter_mremap", coll.Programs["trace_mremap"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 mremap 跟踪点: %v", err)
+		mremapLink = nil
+	} else {
+		defer mremapLink.Close()
+	}
+
+	setnsLink, err := link.Tracepoint("syscalls", "sys_enter_setns", coll.Programs["trace_setns"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 setns 跟踪点: %v", err)
+		setnsLink = nil
+	} else {
+		defer setnsLink.Close()
+	}
+
+	unshareLink, err := link.Tracepoint("syscalls", "sys_enter_unshare", coll.Programs["trace_unshare"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 unshare 跟踪点: %v", err)
+		unshareLink = nil
+	} else {
+		defer unshareLink.Close()
+	}
+
+	prctlLink, err := link.Tracepoint("syscalls", "sys_enter_prctl", coll.Programs["trace_prctl"], nil)
+	if err != nil {
+		log.Printf("警告: 无法附加到 prctl 跟踪点: %v", err)
+		prctlLink = nil
+	} else {
+		defer prctlLink.Close()
+	}
+
 	// 打开Ring Buffer
 	rd, err := ringbuf.NewReader(coll.Maps["rb"])
 	if err != nil {
@@ -843,6 +1118,22 @@ func main() {
 		attachedCount++
 		log.Println("[+] listen 跟踪点已成功附加")
 	}
+	if accept4Link != nil {
+		attachedCount++
+		log.Println("[+] accept4 跟踪点已成功附加")
+	}
+	if acceptLink != nil {
+		attachedCount++
+		log.Println("[+] accept 跟踪点已成功附加")
+	}
+	if sendtoLink != nil {
+		attachedCount++
+		log.Println("[+] sendto 跟踪点已成功附加")
+	}
+	if recvfromLink != nil {
+		attachedCount++
+		log.Println("[+] recvfrom 跟踪点已成功附加")
+	}
 	if openLink != nil {
 		attachedCount++
 		log.Println("[+] openat 跟踪点已成功附加")
@@ -859,6 +1150,22 @@ func main() {
 		attachedCount++
 		log.Println("[+] fchmodat 跟踪点已成功附加")
 	}
+	if renameLink != nil {
+		attachedCount++
+		log.Println("[+] renameat2 跟踪点已成功附加")
+	}
+	if readLink != nil {
+		attachedCount++
+		log.Println("[+] read 跟踪点已成功附加")
+	}
+	if writeLink != nil {
+		attachedCount++
+		log.Println("[+] write 跟踪点已成功附加")
+	}
+	if chownLink != nil {
+		attachedCount++
+		log.Println("[+] fchownat 跟踪点已成功附加")
+	}
 	if mmapLink != nil {
 		attachedCount++
 		log.Println("[+] mmap 跟踪点已成功附加")
@@ -867,6 +1174,14 @@ func main() {
 		attachedCount++
 		log.Println("[+] mprotect 跟踪点已成功附加")
 	}
+	if mremapLink != nil {
+		attachedCount++
+		log.Println("[+] mremap 跟踪点已成功附加")
+	}
+	if munmapLink != nil {
+		attachedCount++
+		log.Println("[+] munmap 跟踪点已成功附加")
+	}
 	if ptraceLink != nil {
 		attachedCount++
 		log.Println("[+] ptrace 跟踪点已成功附加")
@@ -874,6 +1189,70 @@ func main() {
 	if killLink != nil {
 		attachedCount++
 		log.Println("[+] kill 跟踪点已成功附加")
+	}
+	if socketLink != nil {
+		attachedCount++
+		log.Println("[+] socket 跟踪点已成功附加")
+	}
+	if shutdownLink != nil {
+		attachedCount++
+		log.Println("[+] shutdown 跟踪点已成功附加")
+	}
+	if execveatLink != nil {
+		attachedCount++
+		log.Println("[+] execveat 跟踪点已成功附加")
+	}
+	if setnsLink != nil {
+		attachedCount++
+		log.Println("[+] setns 跟踪点已成功附加")
+	}
+	if unshareLink != nil {
+		attachedCount++
+		log.Println("[+] unshare 跟踪点已成功附加")
+	}
+	if prctlLink != nil {
+		attachedCount++
+		log.Println("[+] prctl 跟踪点已成功附加")
+	}
+	if setuidLink != nil {
+		attachedCount++
+		log.Println("[+] setuid 跟踪点已成功附加")
+	}
+	if setgidLink != nil {
+		attachedCount++
+		log.Println("[+] setgid 跟踪点已成功附加")
+	}
+	if setreuidLink != nil {
+		attachedCount++
+		log.Println("[+] setreuid 跟踪点已成功附加")
+	}
+	if setregidLink != nil {
+		attachedCount++
+		log.Println("[+] setregid 跟踪点已成功附加")
+	}
+	if setresuidLink != nil {
+		attachedCount++
+		log.Println("[+] setresuid 跟踪点已成功附加")
+	}
+	if setresgidLink != nil {
+		attachedCount++
+		log.Println("[+] setresgid 跟踪点已成功附加")
+	}
+	if mountLink != nil {
+		attachedCount++
+		log.Println("[+] mount 跟踪点已成功附加")
+	}
+	if umountLink != nil {
+		attachedCount++
+		log.Println("[+] umount 跟踪点已成功附加")
+	}
+	if initModuleLink != nil {
+		attachedCount++
+		log.Println("[+] init_module 跟踪点已成功附加")
+	}
+	if deleteModuleLink != nil {
+		attachedCount++
+		log.Println("[+] delete_module 跟踪点已成功附加")
 	}
 
 	if attachedCount == 0 {
@@ -898,12 +1277,17 @@ func main() {
 		log.Println("[+] 命令行Dashboard已启动")
 	}
 
-	// 信号处理
-	go func() {
+    var wg sync.WaitGroup
+
+    // 信号处理
+    go func() {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 		sig := <-c
 		log.Printf("接收到信号 %v，正在优雅关闭程序...", sig)
+		cancel()
+		_ = rd.Close()
+		wg.Wait()
 
 		duration := time.Since(startTime)
 		log.Printf("程序运行时间: %v", duration.Round(time.Second))
@@ -911,8 +1295,6 @@ func main() {
 		if duration.Seconds() > 0 {
 			log.Printf("平均事件处理速率: %.2f 事件/秒", float64(eventCount)/duration.Seconds())
 		}
-
-		cancel()
 		if alertAPI != nil {
 			_ = alertAPI.Stop()
 		}
@@ -924,8 +1306,10 @@ func main() {
 	eventChan := make(chan ringbuf.Record, 10)
 	errorChan := make(chan error, 1)
 
-	// 启动读取goroutine
+    // 启动读取goroutine
+    wg.Add(1)
 	go func() {
+		defer wg.Done()
 		defer close(eventChan)
 		defer close(errorChan)
 
@@ -977,18 +1361,18 @@ func main() {
 			eventStartTime := time.Now()
 
 			// 解析事件
-			var rawEvent RawEvent
-			if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &rawEvent); err != nil {
-				log.Printf("解析事件数据时出错: %v", err)
-				perfMonitor.RecordError("event_parsing")
-				continue
-			}
+            rawEvent, err := parseRawEvent(record.RawSample)
+            if err != nil {
+                log.Printf("解析事件数据时出错: %v", err)
+                perfMonitor.RecordError("event_parsing")
+                continue
+            }
 
 			// 增加事件计数
 			eventCount++
 
 			// 转换为JSON格式
-			event := convertToJSON(&rawEvent)
+            event := convertToJSON(rawEvent)
 			// 进程事件补充命令行（Linux）
 			enrichEventCmdline(event)
 
@@ -1023,7 +1407,7 @@ func main() {
 
 			// 根据事件类型更新相应的上下文
 			switch event.EventType {
-			case "connect", "bind", "listen", "accept", "sendto", "recvfrom":
+			case "connect", "bind", "listen", "accept", "sendto", "recvfrom", "socket", "shutdown":
 				eventContext.UpdateNetworkContext(event)
 			case "openat", "close", "read", "write", "unlink", "rename", "chmod", "chown":
 				if event.Filename != "" {

@@ -118,15 +118,8 @@ int trace_setuid(struct trace_event_raw_sys_enter *ctx) {
 SEC("tracepoint/syscalls/sys_enter_setgid")
 int trace_setgid(struct trace_event_raw_sys_enter *ctx) {
     TRACE_EVENT_COMMON(CONFIG_ENABLE_PERM_EVENTS, EVENT_SETGID, ctx, {
-        // 记录GID变化信息 - 组权限变更的关键数据
-        // 配合setuid事件，可以完整分析权限提升过程
-        e->old_gid = e->gid;  // 当前GID（来自进程上下文）
-        e->new_gid = (u32)ctx->args[0];  // 目标GID（系统调用参数）
-        
-        // 特别关注：
-        // - 切换到特权组（如GID 0, wheel组等）
-        // - 与setuid事件的时序关系
-        // - 异常的GID切换模式
+        e->old_gid = e->gid;
+        e->new_gid = (u32)ctx->args[0];
     });
 }
 
@@ -239,16 +232,119 @@ int trace_mmap(struct trace_event_raw_sys_enter *ctx) {
 SEC("tracepoint/syscalls/sys_enter_mprotect")
 int trace_mprotect(struct trace_event_raw_sys_enter *ctx) {
     TRACE_EVENT_COMMON(CONFIG_ENABLE_MEM_EVENTS, EVENT_MPROTECT, ctx, {
-        // 记录内存保护变更的关键信息 - W^X绕过检测的核心
-        e->addr = (u64)ctx->args[0];    // 内存区域地址
-        e->len = (u64)ctx->args[1];     // 内存区域长度
-        e->prot = (u32)ctx->args[2];    // 新的保护标志
-        
-        // 高风险操作：
-        // - prot & PROT_EXEC：设置执行权限（代码注入风险）
-        // - prot & (PROT_WRITE | PROT_EXEC)：同时可写可执行（极高风险）
-        // - 对已知代码段的权限修改
-        // - 频繁的权限切换模式
+        e->addr = (u64)ctx->args[0];
+        e->len = (u64)ctx->args[1];
+        e->prot = (u32)ctx->args[2];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_setreuid")
+int trace_setreuid(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_PERM_EVENTS, EVENT_SETREUID, ctx, {
+        e->old_uid = e->uid;
+        e->new_uid = (u32)ctx->args[1];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_setregid")
+int trace_setregid(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_PERM_EVENTS, EVENT_SETREGID, ctx, {
+        e->old_gid = e->gid;
+        e->new_gid = (u32)ctx->args[1];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_setresuid")
+int trace_setresuid(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_PERM_EVENTS, EVENT_SETRESUID, ctx, {
+        e->old_uid = e->uid;
+        e->new_uid = (u32)ctx->args[1];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_setresgid")
+int trace_setresgid(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_PERM_EVENTS, EVENT_SETRESGID, ctx, {
+        e->old_gid = e->gid;
+        e->new_gid = (u32)ctx->args[1];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_munmap")
+int trace_munmap(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_MEM_EVENTS, EVENT_MUNMAP, ctx, {
+        e->addr = (u64)ctx->args[0];
+        e->len = (u64)ctx->args[1];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_init_module")
+int trace_init_module(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_PERM_EVENTS, EVENT_INIT_MODULE, ctx, {
+        e->size = (u64)ctx->args[1];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_delete_module")
+int trace_delete_module(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_PERM_EVENTS, EVENT_DELETE_MODULE, ctx, {
+        const char *name = (const char *)ctx->args[0];
+        if (name) {
+            bpf_probe_read_user_str(e->filename, sizeof(e->filename), name);
+        }
+        e->flags = (u32)ctx->args[1];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_mount")
+int trace_mount(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_PERM_EVENTS, EVENT_MOUNT, ctx, {
+        const char *target = (const char *)ctx->args[1];
+        if (target) {
+            bpf_probe_read_user_str(e->filename, sizeof(e->filename), target);
+        }
+        e->flags = (u32)ctx->args[3];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_umount2")
+int trace_umount(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_PERM_EVENTS, EVENT_UMOUNT, ctx, {
+        const char *target = (const char *)ctx->args[0];
+        if (target) {
+            bpf_probe_read_user_str(e->filename, sizeof(e->filename), target);
+        }
+        e->flags = (u32)ctx->args[1];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_setns")
+int trace_setns(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_PERM_EVENTS, EVENT_SETNS, ctx, {
+        e->flags = (u32)ctx->args[1];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_unshare")
+int trace_unshare(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_PERM_EVENTS, EVENT_UNSHARE, ctx, {
+        e->flags = (u32)ctx->args[0];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_prctl")
+int trace_prctl(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_PERM_EVENTS, EVENT_PRCTL, ctx, {
+        e->flags = (u32)ctx->args[0];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_mremap")
+int trace_mremap(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_MEM_EVENTS, EVENT_MREMAP, ctx, {
+        e->addr = (u64)ctx->args[0];
+        e->len = (u64)ctx->args[2];
+        e->flags = (u32)ctx->args[3];
     });
 }
 

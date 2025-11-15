@@ -67,19 +67,19 @@
 SEC("tracepoint/syscalls/sys_enter_openat")
 int trace_openat(struct trace_event_raw_sys_enter *ctx) {
     TRACE_EVENT_COMMON(CONFIG_ENABLE_FILE_EVENTS, EVENT_OPENAT, ctx, {
-        // 读取文件名 - 这是最重要的信息
-        // 文件名可以帮助识别攻击目标和攻击类型
         const char *filename = (const char *)ctx->args[1];
         if (filename) {
             bpf_probe_read_user_str(e->filename, sizeof(e->filename), filename);
+            if (e->filename[0] == '/' && e->filename[1] == 'p' && e->filename[2] == 'r' && e->filename[3] == 'o' && e->filename[4] == 'c' && e->filename[5] == '/' &&
+                e->filename[6] == 's' && e->filename[7] == 'e' && e->filename[8] == 'l' && e->filename[9] == 'f' && e->filename[10] == '/' &&
+                e->filename[11] == 'f' && e->filename[12] == 'd' && e->filename[13] == 'i' && e->filename[14] == 'n' && e->filename[15] == 'f' && e->filename[16] == 'o' && e->filename[17] == '/') {
+                bpf_ringbuf_discard(e, 0);
+                return 0;
+            }
         }
         
-        // 记录打开标志位 - 包含操作意图信息
-        // O_CREAT: 创建文件, O_WRONLY: 写入, O_APPEND: 追加等
         e->flags = (u32)ctx->args[2];
         
-        // 记录文件权限模式 - 在创建文件时使用
-        // 异常的权限设置可能表明恶意行为
         e->mode = (u32)ctx->args[3];
     });
 }
@@ -212,18 +212,55 @@ int trace_unlink(struct trace_event_raw_sys_enter *ctx) {
 SEC("tracepoint/syscalls/sys_enter_fchmodat")
 int trace_chmod(struct trace_event_raw_sys_enter *ctx) {
     TRACE_EVENT_COMMON(CONFIG_ENABLE_FILE_EVENTS, EVENT_CHMOD, ctx, {
-        // 读取文件名 - 标识权限修改的目标
         const char *filename = (const char *)ctx->args[1];
         if (filename) {
             bpf_probe_read_user_str(e->filename, sizeof(e->filename), filename);
         }
-        
-        // 记录新的权限模式 - 这是最重要的信息
-        // 权限变化可以揭示攻击意图
         e->mode = (u32)ctx->args[2];
-        
-        // 记录操作标志位
-        // AT_SYMLINK_NOFOLLOW: 不跟随符号链接等
         e->flags = (u32)ctx->args[3];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_exit_read")
+int trace_read(struct trace_event_raw_sys_exit *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_FILE_EVENTS, EVENT_READ, ctx, {
+        e->ret_code = ctx->ret;
+        if (ctx->ret > 0) {
+            e->size = (u64)ctx->ret;
+        }
+    });
+}
+
+SEC("tracepoint/syscalls/sys_exit_write")
+int trace_write(struct trace_event_raw_sys_exit *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_FILE_EVENTS, EVENT_WRITE, ctx, {
+        e->ret_code = ctx->ret;
+        if (ctx->ret > 0) {
+            e->size = (u64)ctx->ret;
+        }
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_fchownat")
+int trace_chown(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_FILE_EVENTS, EVENT_CHOWN, ctx, {
+        const char *filename = (const char *)ctx->args[1];
+        if (filename) {
+            bpf_probe_read_user_str(e->filename, sizeof(e->filename), filename);
+        }
+        e->new_uid = (u32)ctx->args[2];
+        e->new_gid = (u32)ctx->args[3];
+        e->flags = (u32)ctx->args[4];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_renameat2")
+int trace_rename(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_FILE_EVENTS, EVENT_RENAME, ctx, {
+        const char *newname = (const char *)ctx->args[3];
+        if (newname) {
+            bpf_probe_read_user_str(e->filename, sizeof(e->filename), newname);
+        }
+        e->flags = (u32)ctx->args[4];
     });
 }

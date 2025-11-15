@@ -29,6 +29,9 @@
 
 // 网络地址族定义 - 用于网络事件处理
 #define AF_INET 2
+#ifndef AF_INET6
+#define AF_INET6 10
+#endif
 
 // eBPF程序许可证声明 - GPL许可证允许使用所有eBPF功能
 char LICENSE[] SEC("license") = "GPL";

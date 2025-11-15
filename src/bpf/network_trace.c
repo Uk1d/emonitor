@@ -76,29 +76,20 @@
 SEC("tracepoint/syscalls/sys_enter_connect")
 int trace_connect(struct trace_event_raw_sys_enter *ctx) {
     TRACE_EVENT_COMMON(CONFIG_ENABLE_NET_EVENTS, EVENT_CONNECT, ctx, {
-        // 读取连接地址信息 - 这是网络监控的核心数据
-        // 目标地址信息可以揭示攻击意图和通信模式
         struct sockaddr *addr = (struct sockaddr *)ctx->args[1];
         if (addr) {
-            // 首先读取协议族，确定地址结构类型
             u16 family;
             bpf_probe_read_user(&family, sizeof(family), &addr->sa_family);
             e->dst_addr.family = family;
-            
-            // 处理IPv4地址 - 当前主要支持的协议
             if (family == AF_INET) {
                 struct sockaddr_in *addr_in = (struct sockaddr_in *)addr;
-                
-                // 提取目标端口号（网络字节序）
-                // 端口信息对于识别服务类型和攻击目标很重要
                 bpf_probe_read_user(&e->dst_addr.port, sizeof(e->dst_addr.port), &addr_in->sin_port);
-                
-                // 提取目标IP地址
-                // IP地址是最重要的网络安全指标
                 bpf_probe_read_user(&e->dst_addr.addr.ipv4, sizeof(e->dst_addr.addr.ipv4), &addr_in->sin_addr);
+            } else if (family == AF_INET6) {
+                struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)addr;
+                bpf_probe_read_user(&e->dst_addr.port, sizeof(e->dst_addr.port), &addr_in6->sin6_port);
+                bpf_probe_read_user(&e->dst_addr.addr.ipv6, sizeof(e->dst_addr.addr.ipv6), &addr_in6->sin6_addr);
             }
-            // 注意：IPv6支持可以在这里添加
-            // else if (family == AF_INET6) { ... }
         }
     });
 }
@@ -149,28 +140,19 @@ int trace_connect(struct trace_event_raw_sys_enter *ctx) {
 SEC("tracepoint/syscalls/sys_enter_bind")
 int trace_bind(struct trace_event_raw_sys_enter *ctx) {
     TRACE_EVENT_COMMON(CONFIG_ENABLE_NET_EVENTS, EVENT_BIND, ctx, {
-        // 读取绑定地址信息 - 识别恶意服务的关键数据
-        // 绑定地址和端口可以揭示攻击者的意图
         struct sockaddr *addr = (struct sockaddr *)ctx->args[1];
         if (addr) {
-            // 读取协议族
             u16 family;
             bpf_probe_read_user(&family, sizeof(family), &addr->sa_family);
             e->src_addr.family = family;
-            
-            // 处理IPv4地址
             if (family == AF_INET) {
                 struct sockaddr_in *addr_in = (struct sockaddr_in *)addr;
-                
-                // 提取绑定端口号
-                // 端口号对于识别服务类型和检测异常至关重要
-                // 特别关注：系统端口(<1024)、常见后门端口等
                 bpf_probe_read_user(&e->src_addr.port, sizeof(e->src_addr.port), &addr_in->sin_port);
-                
-                // 提取绑定IP地址
-                // 0.0.0.0 表示绑定所有接口（风险较高）
-                // 特定IP表示只绑定特定接口（相对安全）
                 bpf_probe_read_user(&e->src_addr.addr.ipv4, sizeof(e->src_addr.addr.ipv4), &addr_in->sin_addr);
+            } else if (family == AF_INET6) {
+                struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)addr;
+                bpf_probe_read_user(&e->src_addr.port, sizeof(e->src_addr.port), &addr_in6->sin6_port);
+                bpf_probe_read_user(&e->src_addr.addr.ipv6, sizeof(e->src_addr.addr.ipv6), &addr_in6->sin6_addr);
             }
         }
     });
@@ -224,10 +206,111 @@ int trace_bind(struct trace_event_raw_sys_enter *ctx) {
 SEC("tracepoint/syscalls/sys_enter_listen")
 int trace_listen(struct trace_event_raw_sys_enter *ctx) {
     TRACE_EVENT_COMMON(CONFIG_ENABLE_NET_EVENTS, EVENT_LISTEN, ctx, {
-        // 记录listen的backlog参数
-        // backlog控制连接队列的最大长度
-        // 大的backlog值可能表明高并发服务或特殊用途
-        // 这个参数可以帮助分析服务的预期用途和规模
+        e->flags = (u32)ctx->args[1];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_accept4")
+int trace_accept4(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_NET_EVENTS, EVENT_ACCEPT, ctx, {
+        struct sockaddr *addr = (struct sockaddr *)ctx->args[1];
+        if (addr) {
+            u16 family;
+            bpf_probe_read_user(&family, sizeof(family), &addr->sa_family);
+            e->src_addr.family = family;
+            if (family == AF_INET) {
+                struct sockaddr_in *addr_in = (struct sockaddr_in *)addr;
+                bpf_probe_read_user(&e->src_addr.port, sizeof(e->src_addr.port), &addr_in->sin_port);
+                bpf_probe_read_user(&e->src_addr.addr.ipv4, sizeof(e->src_addr.addr.ipv4), &addr_in->sin_addr);
+            } else if (family == AF_INET6) {
+                struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)addr;
+                bpf_probe_read_user(&e->src_addr.port, sizeof(e->src_addr.port), &addr_in6->sin6_port);
+                bpf_probe_read_user(&e->src_addr.addr.ipv6, sizeof(e->src_addr.addr.ipv6), &addr_in6->sin6_addr);
+            }
+        }
+        e->flags = (u32)ctx->args[3];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_accept")
+int trace_accept(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_NET_EVENTS, EVENT_ACCEPT, ctx, {
+        struct sockaddr *addr = (struct sockaddr *)ctx->args[1];
+        if (addr) {
+            u16 family;
+            bpf_probe_read_user(&family, sizeof(family), &addr->sa_family);
+            e->src_addr.family = family;
+            if (family == AF_INET) {
+                struct sockaddr_in *addr_in = (struct sockaddr_in *)addr;
+                bpf_probe_read_user(&e->src_addr.port, sizeof(e->src_addr.port), &addr_in->sin_port);
+                bpf_probe_read_user(&e->src_addr.addr.ipv4, sizeof(e->src_addr.addr.ipv4), &addr_in->sin_addr);
+            } else if (family == AF_INET6) {
+                struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)addr;
+                bpf_probe_read_user(&e->src_addr.port, sizeof(e->src_addr.port), &addr_in6->sin6_port);
+                bpf_probe_read_user(&e->src_addr.addr.ipv6, sizeof(e->src_addr.addr.ipv6), &addr_in6->sin6_addr);
+            }
+        }
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_sendto")
+int trace_sendto(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_NET_EVENTS, EVENT_SENDTO, ctx, {
+        struct sockaddr *addr = (struct sockaddr *)ctx->args[4];
+        if (addr) {
+            u16 family;
+            bpf_probe_read_user(&family, sizeof(family), &addr->sa_family);
+            e->dst_addr.family = family;
+            if (family == AF_INET) {
+                struct sockaddr_in *addr_in = (struct sockaddr_in *)addr;
+                bpf_probe_read_user(&e->dst_addr.port, sizeof(e->dst_addr.port), &addr_in->sin_port);
+                bpf_probe_read_user(&e->dst_addr.addr.ipv4, sizeof(e->dst_addr.addr.ipv4), &addr_in->sin_addr);
+            } else if (family == AF_INET6) {
+                struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)addr;
+                bpf_probe_read_user(&e->dst_addr.port, sizeof(e->dst_addr.port), &addr_in6->sin6_port);
+                bpf_probe_read_user(&e->dst_addr.addr.ipv6, sizeof(e->dst_addr.addr.ipv6), &addr_in6->sin6_addr);
+            }
+        }
+        e->size = (u64)ctx->args[2];
+        e->flags = (u32)ctx->args[3];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_recvfrom")
+int trace_recvfrom(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_NET_EVENTS, EVENT_RECVFROM, ctx, {
+        struct sockaddr *addr = (struct sockaddr *)ctx->args[4];
+        if (addr) {
+            u16 family;
+            bpf_probe_read_user(&family, sizeof(family), &addr->sa_family);
+            e->src_addr.family = family;
+            if (family == AF_INET) {
+                struct sockaddr_in *addr_in = (struct sockaddr_in *)addr;
+                bpf_probe_read_user(&e->src_addr.port, sizeof(e->src_addr.port), &addr_in->sin_port);
+                bpf_probe_read_user(&e->src_addr.addr.ipv4, sizeof(e->src_addr.addr.ipv4), &addr_in->sin_addr);
+            } else if (family == AF_INET6) {
+                struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)addr;
+                bpf_probe_read_user(&e->src_addr.port, sizeof(e->src_addr.port), &addr_in6->sin6_port);
+                bpf_probe_read_user(&e->src_addr.addr.ipv6, sizeof(e->src_addr.addr.ipv6), &addr_in6->sin6_addr);
+            }
+        }
+        e->size = (u64)ctx->args[2];
+        e->flags = (u32)ctx->args[3];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_socket")
+int trace_socket(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_NET_EVENTS, EVENT_SOCKET, ctx, {
+        e->src_addr.family = (u16)ctx->args[0];
+        e->flags = (u32)ctx->args[1];
+        e->size = (u64)ctx->args[2];
+    });
+}
+
+SEC("tracepoint/syscalls/sys_enter_shutdown")
+int trace_shutdown(struct trace_event_raw_sys_enter *ctx) {
+    TRACE_EVENT_COMMON(CONFIG_ENABLE_NET_EVENTS, EVENT_SHUTDOWN, ctx, {
         e->flags = (u32)ctx->args[1];
     });
 }

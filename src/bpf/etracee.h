@@ -16,6 +16,7 @@ enum event_type {
     EVENT_FORK = 2,             // 进程创建
     EVENT_CLONE = 3,            // 线程/进程克隆
     EVENT_EXIT = 4,             // 进程退出
+    EVENT_EXECVEAT = 5,         // execveat
     
     // 文件系统相关事件
     EVENT_OPENAT = 10,          // 文件打开
@@ -34,6 +35,8 @@ enum event_type {
     EVENT_ACCEPT = 23,          // 接受连接
     EVENT_SENDTO = 24,          // 发送数据
     EVENT_RECVFROM = 25,        // 接收数据
+    EVENT_SOCKET = 26,          // 创建套接字
+    EVENT_SHUTDOWN = 27,        // 关闭套接字方向
     
     // 权限相关事件
     EVENT_SETUID = 30,          // 设置用户ID
@@ -42,11 +45,15 @@ enum event_type {
     EVENT_SETREGID = 33,        // 设置真实组ID
     EVENT_SETRESUID = 34,       // 设置有效用户ID
     EVENT_SETRESGID = 35,       // 设置有效组ID
+    EVENT_SETNS = 36,           // 进入命名空间
+    EVENT_UNSHARE = 37,         // 解绑命名空间
+    EVENT_PRCTL = 38,           // 进程控制
     
     // 内存相关事件
     EVENT_MMAP = 40,            // 内存映射
     EVENT_MPROTECT = 41,        // 内存保护修改
     EVENT_MUNMAP = 42,          // 内存解映射
+    EVENT_MREMAP = 43,          // 内存重新映射
     
     // 模块相关事件
     EVENT_INIT_MODULE = 50,     // 加载内核模块
@@ -115,6 +122,7 @@ static inline const char* event_type_to_string(enum event_type type) {
         case EVENT_FORK: return "fork";
         case EVENT_CLONE: return "clone";
         case EVENT_EXIT: return "exit";
+        case EVENT_EXECVEAT: return "execveat";
         
         // 文件系统相关
         case EVENT_OPENAT: return "openat";
@@ -133,6 +141,8 @@ static inline const char* event_type_to_string(enum event_type type) {
         case EVENT_ACCEPT: return "accept";
         case EVENT_SENDTO: return "sendto";
         case EVENT_RECVFROM: return "recvfrom";
+        case EVENT_SOCKET: return "socket";
+        case EVENT_SHUTDOWN: return "shutdown";
         
         // 权限相关
         case EVENT_SETUID: return "setuid";
@@ -141,11 +151,15 @@ static inline const char* event_type_to_string(enum event_type type) {
         case EVENT_SETREGID: return "setregid";
         case EVENT_SETRESUID: return "setresuid";
         case EVENT_SETRESGID: return "setresgid";
+        case EVENT_SETNS: return "setns";
+        case EVENT_UNSHARE: return "unshare";
+        case EVENT_PRCTL: return "prctl";
         
         // 内存相关
         case EVENT_MMAP: return "mmap";
         case EVENT_MPROTECT: return "mprotect";
         case EVENT_MUNMAP: return "munmap";
+        case EVENT_MREMAP: return "mremap";
         
         // 模块相关
         case EVENT_INIT_MODULE: return "init_module";
