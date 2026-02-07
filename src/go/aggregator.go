@@ -480,24 +480,24 @@ func generateAlertDescription(event *EventJSON) string {
 
 // getFileOperation 获取文件操作类型
 func getFileOperation(eventType string) string {
-	switch eventType {
-	case "EVENT_OPENAT":
-		return "open"
-	case "EVENT_CLOSE":
-		return "close"
-	case "EVENT_READ":
-		return "read"
-	case "EVENT_WRITE":
-		return "write"
-	case "EVENT_UNLINK":
-		return "delete"
-	case "EVENT_RENAME":
-		return "rename"
-	case "EVENT_CHMOD":
-		return "chmod"
-	case "EVENT_CHOWN":
-		return "chown"
-	default:
-		return ""
-	}
+    switch eventType {
+    case "openat":
+        return "open"
+    case "close":
+        return "close"
+    case "read":
+        return "read"
+    case "write":
+        return "write"
+    case "unlink":
+        return "delete"
+    case "rename":
+        return "rename"
+    case "chmod":
+        return "chmod"
+    case "chown":
+        return "chown"
+    default:
+        return ""
+    }
 }

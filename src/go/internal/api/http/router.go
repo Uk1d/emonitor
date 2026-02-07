@@ -7,8 +7,8 @@ type Handlers interface {
     HandleAlertDetail(http.ResponseWriter, *http.Request)
     HandleAlertStats(http.ResponseWriter, *http.Request)
     HandleAttackChains(http.ResponseWriter, *http.Request)
+    HandleAttackChainGraph(http.ResponseWriter, *http.Request)
     HandleEvents(http.ResponseWriter, *http.Request)
-    HandleGraphSubgraph(http.ResponseWriter, *http.Request)
     HandleWebSocket(http.ResponseWriter, *http.Request)
 }
 
@@ -17,7 +17,7 @@ func Register(mux *http.ServeMux, h Handlers) {
     mux.HandleFunc("/api/alerts/", h.HandleAlertDetail)
     mux.HandleFunc("/api/alerts/stats", h.HandleAlertStats)
     mux.HandleFunc("/api/attack-chains", h.HandleAttackChains)
+    mux.HandleFunc("/api/attack-chains/graph", h.HandleAttackChainGraph)
     mux.HandleFunc("/api/events", h.HandleEvents)
-    mux.HandleFunc("/api/graph/subgraph", h.HandleGraphSubgraph)
     mux.HandleFunc("/ws", h.HandleWebSocket)
 }

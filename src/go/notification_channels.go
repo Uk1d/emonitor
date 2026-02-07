@@ -19,22 +19,31 @@ type LogNotificationChannel struct{}
 
 func (c *LogNotificationChannel) SendNotification(alert *ManagedAlert) error {
 	// 根据严重级别使用不同的日志格式
+	if alert == nil {
+		return nil
+	}
+	pid := uint32(0)
+	uid := uint32(0)
+	if alert.Event != nil {
+		pid = alert.Event.PID
+		uid = alert.Event.UID
+	}
     switch alert.Severity {
     case "critical":
         log.Printf("[!] [CRITICAL] %s: %s (PID: %d, UID: %d)", 
-            alert.RuleName, alert.Description, alert.Event.PID, alert.Event.UID)
+            alert.RuleName, alert.Description, pid, uid)
     case "high":
         log.Printf("[!] [HIGH] %s: %s (PID: %d, UID: %d)", 
-            alert.RuleName, alert.Description, alert.Event.PID, alert.Event.UID)
+            alert.RuleName, alert.Description, pid, uid)
     case "medium":
         log.Printf("[*] [MEDIUM] %s: %s (PID: %d, UID: %d)", 
-            alert.RuleName, alert.Description, alert.Event.PID, alert.Event.UID)
+            alert.RuleName, alert.Description, pid, uid)
     case "low":
         log.Printf("[*] [LOW] %s: %s (PID: %d, UID: %d)", 
-            alert.RuleName, alert.Description, alert.Event.PID, alert.Event.UID)
+            alert.RuleName, alert.Description, pid, uid)
     default:
         log.Printf("[*] [INFO] %s: %s (PID: %d, UID: %d)", 
-            alert.RuleName, alert.Description, alert.Event.PID, alert.Event.UID)
+            alert.RuleName, alert.Description, pid, uid)
     }
 	
 	return nil
@@ -50,8 +59,21 @@ type FileNotificationChannel struct {
 }
 
 func (c *FileNotificationChannel) SendNotification(alert *ManagedAlert) error {
+	if alert == nil {
+		return nil
+	}
 	if c.Path == "" {
 		c.Path = "data/notifications"
+	}
+	pid := uint32(0)
+	uid := uint32(0)
+	comm := ""
+	eventFilename := ""
+	if alert.Event != nil {
+		pid = alert.Event.PID
+		uid = alert.Event.UID
+		comm = alert.Event.Comm
+		eventFilename = alert.Event.Filename
 	}
 	
 	// 确保目录存在
@@ -73,10 +95,10 @@ func (c *FileNotificationChannel) SendNotification(alert *ManagedAlert) error {
 		"description":  alert.Description,
 		"category":     alert.Category,
 		"event": map[string]interface{}{
-			"pid":      alert.Event.PID,
-			"uid":      alert.Event.UID,
-			"comm":     alert.Event.Comm,
-			"filename": alert.Event.Filename,
+			"pid":      pid,
+			"uid":      uid,
+			"comm":     comm,
+			"filename": eventFilename,
 		},
 		"actions":      alert.Actions,
 		"mitre_attack": alert.MitreAttack,
@@ -108,7 +130,20 @@ type ConsoleNotificationChannel struct {
 }
 
 func (c *ConsoleNotificationChannel) SendNotification(alert *ManagedAlert) error {
+	if alert == nil {
+		return nil
+	}
 	var colorCode, resetCode string
+	pid := uint32(0)
+	uid := uint32(0)
+	comm := ""
+	filename := ""
+	if alert.Event != nil {
+		pid = alert.Event.PID
+		uid = alert.Event.UID
+		comm = alert.Event.Comm
+		filename = alert.Event.Filename
+	}
 	
 	if c.EnableColors {
 		switch alert.Severity {
@@ -133,11 +168,11 @@ func (c *ConsoleNotificationChannel) SendNotification(alert *ManagedAlert) error
     fmt.Printf("%s- 严重级别:   %s%s\n", colorCode, alert.Severity, resetCode)
     fmt.Printf("%s- 分类:       %s%s\n", colorCode, alert.Category, resetCode)
     fmt.Printf("%s- 描述:       %s%s\n", colorCode, alert.Description, resetCode)
-    fmt.Printf("%s- 进程ID:     %d%s\n", colorCode, alert.Event.PID, resetCode)
-    fmt.Printf("%s- 用户ID:     %d%s\n", colorCode, alert.Event.UID, resetCode)
-    fmt.Printf("%s- 进程名:     %s%s\n", colorCode, alert.Event.Comm, resetCode)
-    if alert.Event.Filename != "" {
-        fmt.Printf("%s- 文件名:     %s%s\n", colorCode, alert.Event.Filename, resetCode)
+    fmt.Printf("%s- 进程ID:     %d%s\n", colorCode, pid, resetCode)
+    fmt.Printf("%s- 用户ID:     %d%s\n", colorCode, uid, resetCode)
+    fmt.Printf("%s- 进程名:     %s%s\n", colorCode, comm, resetCode)
+    if filename != "" {
+        fmt.Printf("%s- 文件名:     %s%s\n", colorCode, filename, resetCode)
     }
     if alert.MitreAttack != nil {
         fmt.Printf("%s- MITRE技术:  %s%s\n", colorCode, alert.MitreAttack.TechniqueID, resetCode)
@@ -166,6 +201,19 @@ type EmailNotificationChannel struct {
 func (c *EmailNotificationChannel) SendNotification(alert *ManagedAlert) error {
 	// 这里是邮件发送的模拟实现
 	// 在实际环境中，需要使用真实的SMTP库
+	if alert == nil {
+		return nil
+	}
+	pid := uint32(0)
+	uid := uint32(0)
+	comm := ""
+	filename := ""
+	if alert.Event != nil {
+		pid = alert.Event.PID
+		uid = alert.Event.UID
+		comm = alert.Event.Comm
+		filename = alert.Event.Filename
+	}
 	
 	subject := fmt.Sprintf("[eTracee Alert] %s - %s", alert.Severity, alert.RuleName)
 	
@@ -197,10 +245,10 @@ eTracee 安全监控系统
 		alert.Severity,
 		alert.Category,
 		alert.Description,
-		alert.Event.PID,
-		alert.Event.UID,
-		alert.Event.Comm,
-		alert.Event.Filename,
+		pid,
+		uid,
+		comm,
+		filename,
 		alert.CreatedAt.Format("2006-01-02 15:04:05"),
 	)
 	
@@ -228,6 +276,19 @@ type WebhookNotificationChannel struct {
 }
 
 func (c *WebhookNotificationChannel) SendNotification(alert *ManagedAlert) error {
+	if alert == nil {
+		return nil
+	}
+	pid := uint32(0)
+	uid := uint32(0)
+	comm := ""
+	filename := ""
+	if alert.Event != nil {
+		pid = alert.Event.PID
+		uid = alert.Event.UID
+		comm = alert.Event.Comm
+		filename = alert.Event.Filename
+	}
     // 准备Webhook负载
     payload := map[string]interface{}{
 		"alert_id":     alert.ID,
@@ -237,10 +298,10 @@ func (c *WebhookNotificationChannel) SendNotification(alert *ManagedAlert) error
 		"description":  alert.Description,
 		"timestamp":    alert.CreatedAt.Format(time.RFC3339),
 		"event": map[string]interface{}{
-			"pid":      alert.Event.PID,
-			"uid":      alert.Event.UID,
-			"comm":     alert.Event.Comm,
-			"filename": alert.Event.Filename,
+			"pid":      pid,
+			"uid":      uid,
+			"comm":     comm,
+			"filename": filename,
 		},
 		"mitre_attack": alert.MitreAttack,
 		"actions":      alert.Actions,
@@ -324,6 +385,17 @@ type SlackNotificationChannel struct {
 }
 
 func (c *SlackNotificationChannel) SendNotification(alert *ManagedAlert) error {
+	if alert == nil {
+		return nil
+	}
+	pid := uint32(0)
+	uid := uint32(0)
+	comm := ""
+	if alert.Event != nil {
+		pid = alert.Event.PID
+		uid = alert.Event.UID
+		comm = alert.Event.Comm
+	}
 	// 根据严重级别选择颜色
 	var color string
 	switch alert.Severity {
@@ -362,12 +434,12 @@ func (c *SlackNotificationChannel) SendNotification(alert *ManagedAlert) error {
 					},
 					{
 						"title": "进程",
-						"value": fmt.Sprintf("%s (PID: %d)", alert.Event.Comm, alert.Event.PID),
+						"value": fmt.Sprintf("%s (PID: %d)", comm, pid),
 						"short": true,
 					},
 					{
 						"title": "用户",
-						"value": fmt.Sprintf("UID: %d", alert.Event.UID),
+						"value": fmt.Sprintf("UID: %d", uid),
 						"short": true,
 					},
 				},
@@ -404,6 +476,15 @@ type SyslogNotificationChannel struct {
 }
 
 func (c *SyslogNotificationChannel) SendNotification(alert *ManagedAlert) error {
+	if alert == nil {
+		return nil
+	}
+	pid := uint32(0)
+	uid := uint32(0)
+	if alert.Event != nil {
+		pid = alert.Event.PID
+		uid = alert.Event.UID
+	}
 	// 构建syslog消息
 	priority := c.calculatePriority(alert.Severity)
 	timestamp := alert.CreatedAt.Format("Jan 02 15:04:05")
@@ -417,8 +498,8 @@ func (c *SyslogNotificationChannel) SendNotification(alert *ManagedAlert) error 
 		alert.Severity,
 		alert.RuleName,
 		alert.Description,
-		alert.Event.PID,
-		alert.Event.UID,
+		pid,
+		uid,
 	)
 	
 	// 模拟发送syslog
@@ -458,6 +539,19 @@ type DatabaseNotificationChannel struct {
 }
 
 func (c *DatabaseNotificationChannel) SendNotification(alert *ManagedAlert) error {
+	if alert == nil {
+		return nil
+	}
+	pid := uint32(0)
+	uid := uint32(0)
+	comm := ""
+	filename := ""
+	if alert.Event != nil {
+		pid = alert.Event.PID
+		uid = alert.Event.UID
+		comm = alert.Event.Comm
+		filename = alert.Event.Filename
+	}
 	// 模拟数据库插入
 	insertSQL := fmt.Sprintf(`
 INSERT INTO %s (
@@ -473,10 +567,10 @@ INSERT INTO %s (
 		alert.Severity,
 		alert.Category,
 		alert.Description,
-		alert.Event.PID,
-		alert.Event.UID,
-		alert.Event.Comm,
-		alert.Event.Filename,
+		pid,
+		uid,
+		comm,
+		filename,
 		alert.CreatedAt.Format("2006-01-02 15:04:05"),
 		func() string {
 			if alert.MitreAttack != nil {

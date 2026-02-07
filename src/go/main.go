@@ -259,48 +259,48 @@ func (et EventType) String() string {
 
 // 字节数组转字符串
 func bytesToString(b []byte) string {
-    n := bytes.IndexByte(b, 0)
-    if n == -1 {
-        n = len(b)
-    }
-    return string(b[:n])
+	n := bytes.IndexByte(b, 0)
+	if n == -1 {
+		n = len(b)
+	}
+	return string(b[:n])
 }
 
 func parseRawEvent(b []byte) (*RawEvent, error) {
-    if len(b) < 428 {
-        return nil, fmt.Errorf("invalid event size: %d", len(b))
-    }
-    e := &RawEvent{}
-    e.Timestamp = binary.LittleEndian.Uint64(b[0:8])
-    e.PID = binary.LittleEndian.Uint32(b[8:12])
-    e.PPID = binary.LittleEndian.Uint32(b[12:16])
-    e.UID = binary.LittleEndian.Uint32(b[16:20])
-    e.GID = binary.LittleEndian.Uint32(b[20:24])
-    e.SyscallID = binary.LittleEndian.Uint32(b[24:28])
-    e.EventType = binary.LittleEndian.Uint32(b[28:32])
-    e.RetCode = int32(binary.LittleEndian.Uint32(b[32:36]))
-    copy(e.Comm[:], b[36:52])
-    copy(e.Filename[:], b[52:308])
-    e.Mode = binary.LittleEndian.Uint32(b[308:312])
-    e.Size = binary.LittleEndian.Uint64(b[312:320])
-    e.Flags = binary.LittleEndian.Uint32(b[320:324])
-    e.SrcAddr.Family = binary.LittleEndian.Uint16(b[324:326])
-    e.SrcAddr.Port = binary.LittleEndian.Uint16(b[326:328])
-    copy(e.SrcAddr.Addr[:], b[328:344])
-    e.DstAddr.Family = binary.LittleEndian.Uint16(b[344:346])
-    e.DstAddr.Port = binary.LittleEndian.Uint16(b[346:348])
-    copy(e.DstAddr.Addr[:], b[348:364])
-    e.OldUID = binary.LittleEndian.Uint32(b[364:368])
-    e.OldGID = binary.LittleEndian.Uint32(b[368:372])
-    e.NewUID = binary.LittleEndian.Uint32(b[372:376])
-    e.NewGID = binary.LittleEndian.Uint32(b[376:380])
-    e.Addr = binary.LittleEndian.Uint64(b[384:392])
-    e.Len = binary.LittleEndian.Uint64(b[392:400])
-    e.Prot = binary.LittleEndian.Uint32(b[400:404])
-    copy(e.TargetComm[:], b[404:420])
-    e.TargetPID = binary.LittleEndian.Uint32(b[420:424])
-    e.Signal = binary.LittleEndian.Uint32(b[424:428])
-    return e, nil
+	if len(b) < 428 {
+		return nil, fmt.Errorf("invalid event size: %d", len(b))
+	}
+	e := &RawEvent{}
+	e.Timestamp = binary.LittleEndian.Uint64(b[0:8])
+	e.PID = binary.LittleEndian.Uint32(b[8:12])
+	e.PPID = binary.LittleEndian.Uint32(b[12:16])
+	e.UID = binary.LittleEndian.Uint32(b[16:20])
+	e.GID = binary.LittleEndian.Uint32(b[20:24])
+	e.SyscallID = binary.LittleEndian.Uint32(b[24:28])
+	e.EventType = binary.LittleEndian.Uint32(b[28:32])
+	e.RetCode = int32(binary.LittleEndian.Uint32(b[32:36]))
+	copy(e.Comm[:], b[36:52])
+	copy(e.Filename[:], b[52:308])
+	e.Mode = binary.LittleEndian.Uint32(b[308:312])
+	e.Size = binary.LittleEndian.Uint64(b[312:320])
+	e.Flags = binary.LittleEndian.Uint32(b[320:324])
+	e.SrcAddr.Family = binary.LittleEndian.Uint16(b[324:326])
+	e.SrcAddr.Port = binary.LittleEndian.Uint16(b[326:328])
+	copy(e.SrcAddr.Addr[:], b[328:344])
+	e.DstAddr.Family = binary.LittleEndian.Uint16(b[344:346])
+	e.DstAddr.Port = binary.LittleEndian.Uint16(b[346:348])
+	copy(e.DstAddr.Addr[:], b[348:364])
+	e.OldUID = binary.LittleEndian.Uint32(b[364:368])
+	e.OldGID = binary.LittleEndian.Uint32(b[368:372])
+	e.NewUID = binary.LittleEndian.Uint32(b[372:376])
+	e.NewGID = binary.LittleEndian.Uint32(b[376:380])
+	e.Addr = binary.LittleEndian.Uint64(b[384:392])
+	e.Len = binary.LittleEndian.Uint64(b[392:400])
+	e.Prot = binary.LittleEndian.Uint32(b[400:404])
+	copy(e.TargetComm[:], b[404:420])
+	e.TargetPID = binary.LittleEndian.Uint32(b[420:424])
+	e.Signal = binary.LittleEndian.Uint32(b[424:428])
+	return e, nil
 }
 
 // 内存保护标志转换
@@ -527,58 +527,6 @@ func loadEnhancedSecurityConfig(configPath string, ruleEngine *EnhancedRuleEngin
 	return nil
 }
 
-func loadLegacyRulesAsEnhanced(path string, e *EnhancedRuleEngine) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	var legacy struct {
-		Global struct {
-			EnableFileEvents       bool   `yaml:"enable_file_events"`
-			EnableNetworkEvents    bool   `yaml:"enable_network_events"`
-			EnableProcessEvents    bool   `yaml:"enable_process_events"`
-			EnablePermissionEvents bool   `yaml:"enable_permission_events"`
-			MinUIDFilter           uint32 `yaml:"min_uid_filter"`
-			MaxUIDFilter           uint32 `yaml:"max_uid_filter"`
-		} `yaml:"global"`
-		DetectionRules map[string][]struct {
-			Name          string                   `yaml:"name"`
-			Description   string                   `yaml:"description"`
-			Conditions    []map[string]interface{} `yaml:"conditions"`
-			Severity      string                   `yaml:"severity"`
-			FreqThreshold int                      `yaml:"frequency_threshold"`
-		} `yaml:"detection_rules"`
-		Whitelist WhitelistConfig `yaml:"whitelist"`
-	}
-	if err := yaml.Unmarshal(data, &legacy); err != nil {
-		return err
-	}
-	e.GlobalConfig.EnableFileEvents = legacy.Global.EnableFileEvents
-	e.GlobalConfig.EnableNetworkEvents = legacy.Global.EnableNetworkEvents
-	e.GlobalConfig.EnableProcessEvents = legacy.Global.EnableProcessEvents
-	e.GlobalConfig.EnablePermissionEvents = legacy.Global.EnablePermissionEvents
-	e.GlobalConfig.MinUIDFilter = legacy.Global.MinUIDFilter
-	e.GlobalConfig.MaxUIDFilter = legacy.Global.MaxUIDFilter
-	e.WhitelistConfig = legacy.Whitelist
-	e.Rules = make(map[string][]EnhancedDetectionRule)
-	for cat, rules := range legacy.DetectionRules {
-		list := make([]EnhancedDetectionRule, 0, len(rules))
-		for _, r := range rules {
-			list = append(list, EnhancedDetectionRule{
-				Name:          r.Name,
-				Description:   r.Description,
-				Conditions:    r.Conditions,
-				Severity:      r.Severity,
-				LogicOperator: "AND",
-				Enabled:       true,
-				Category:      cat,
-			})
-		}
-		e.Rules[cat] = list
-	}
-	return nil
-}
-
 func main() {
 	// 检查是否运行测试
 	if len(os.Args) > 1 && os.Args[1] == "test" {
@@ -653,8 +601,6 @@ func main() {
 		}
 	}
 
-	// 注册额外的告警处理器
-	alertManager.RegisterProcessor(NewAttackChainProcessor())
 	alertManager.RegisterProcessor(NewThreatIntelProcessor())
 
 	// 注册额外的通知渠道
@@ -715,10 +661,7 @@ func main() {
 	// 加载安全配置到增强规则引擎
 	if err := loadEnhancedSecurityConfig(*configPath, ruleEngine); err != nil {
 		log.Printf("Warning: Failed to load enhanced security config: %v", err)
-		if err2 := loadLegacyRulesAsEnhanced("config/security_rules.yaml", ruleEngine); err2 != nil {
-			log.Printf("Warning: Fallback to legacy rules failed: %v", err2)
-		}
-
+		// 使用环境变量回退配置
 		ruleEngine.GlobalConfig = EnhancedGlobalConfig{
 			EnableFileEvents:       config.BoolFromEnv("ETRACEE_ENABLE_FILE", true),
 			EnableNetworkEvents:    config.BoolFromEnv("ETRACEE_ENABLE_NETWORK", true),
@@ -1277,10 +1220,10 @@ func main() {
 		log.Println("[+] 命令行Dashboard已启动")
 	}
 
-    var wg sync.WaitGroup
+	var wg sync.WaitGroup
 
-    // 信号处理
-    go func() {
+	// 信号处理
+	go func() {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 		sig := <-c
@@ -1306,8 +1249,8 @@ func main() {
 	eventChan := make(chan ringbuf.Record, 10)
 	errorChan := make(chan error, 1)
 
-    // 启动读取goroutine
-    wg.Add(1)
+	// 启动读取goroutine
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		defer close(eventChan)
@@ -1361,18 +1304,18 @@ func main() {
 			eventStartTime := time.Now()
 
 			// 解析事件
-            rawEvent, err := parseRawEvent(record.RawSample)
-            if err != nil {
-                log.Printf("解析事件数据时出错: %v", err)
-                perfMonitor.RecordError("event_parsing")
-                continue
-            }
+			rawEvent, err := parseRawEvent(record.RawSample)
+			if err != nil {
+				log.Printf("解析事件数据时出错: %v", err)
+				perfMonitor.RecordError("event_parsing")
+				continue
+			}
 
 			// 增加事件计数
 			eventCount++
 
 			// 转换为JSON格式
-            event := convertToJSON(rawEvent)
+			event := convertToJSON(rawEvent)
 			// 进程事件补充命令行（Linux）
 			enrichEventCmdline(event)
 
@@ -1390,14 +1333,7 @@ func main() {
 				continue
 			}
 
-			// WebSocket实时推送原始事件（通过AlertAPI）
-			if alertAPI != nil {
-				alertAPI.BroadcastEvent(event)
-				// 推送图谱增量，供前端 D3 实时可视化
-				if gu := BuildGraphUpdateFromEvent(eventContext, event); gu != nil {
-					alertAPI.BroadcastGraphUpdate(gu)
-				}
-			}
+			// 事件流仅通过HTTP分页拉取，移除WebSocket原始事件推送
 
 			// 应用增强安全规则引擎
 			alerts := ruleEngine.MatchRules(event)
@@ -1481,10 +1417,14 @@ func main() {
 				dashboardInstance.UpdateStats(event)
 			}
 
-			// 持久化事件到存储（如可用）
+			// 存储事件（如果启用存储）
 			if storage != nil {
-				_ = storage.SaveEvent(event)
+				if err := storage.SaveEvent(event); err != nil {
+					log.Printf("保存事件失败: %v", err)
+				}
 			}
+
+			// 告警生成由规则引擎与告警管理器统一处理，移除重复路径
 
 			// 输出JSON
 			if jsonData, err := json.Marshal(event); err == nil {

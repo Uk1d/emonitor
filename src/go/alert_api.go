@@ -1,24 +1,24 @@
 package main
 
 import (
-    "encoding/json"
-    "errors"
-    "fmt"
-    "log"
-    "net/http"
-    "path"
-    "net"
-    "strconv"
-    "strings"
-    "sync"
-    "time"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"path"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
-    "etracee/internal/api/middleware"
-    httpapi "etracee/internal/api/http"
-    "etracee/internal/common/config"
-    "etracee/internal/web"
+	httpapi "etracee/internal/api/http"
+	"etracee/internal/api/middleware"
+	"etracee/internal/common/config"
+	"etracee/internal/web"
 
-    "github.com/gorilla/websocket"
+	"github.com/gorilla/websocket"
 )
 
 // AlertAPI 告警API服务器
@@ -51,26 +51,27 @@ func NewAlertAPI(alertManager *AlertManager, port int, storage Storage, eventCon
 
 	mux := http.NewServeMux()
 
-    httpapi.Register(mux, api)
-    mux.Handle("/", web.Handler())
+	httpapi.Register(mux, api)
+	mux.Handle("/", web.Handler())
 
-    api.allowedOrigins = config.AllowedOriginsFromEnv()
-    api.apiToken = config.APITokenFromEnv()
-    api.requireAuth = api.apiToken != ""
-    api.bindAddr = config.BindAddrFromEnv()
-    if api.bindAddr == "" {
-        api.bindAddr = "0.0.0.0"
-        log.Printf("[*] 未设置 ETRACEE_BIND_ADDR，默认绑定到 %s", api.bindAddr)
-    }
+	api.allowedOrigins = config.AllowedOriginsFromEnv()
+	api.apiToken = config.APITokenFromEnv()
+	api.requireAuth = api.apiToken != ""
+	api.bindAddr = config.BindAddrFromEnv()
+	if api.bindAddr == "" {
+		api.bindAddr = "0.0.0.0"
+		log.Printf("[*] 未设置 ETRACEE_BIND_ADDR，默认绑定到 %s", api.bindAddr)
+	}
 
 	mw := middleware.NewCORSMiddleware(api.allowedOrigins, api.apiToken)
-    api.wsUpgrader = websocket.Upgrader{CheckOrigin: mw.CheckOrigin}
-    if api.requireAuth {
-        api.wsUpgrader.Subprotocols = []string{api.apiToken, "Bearer " + api.apiToken}
-    }
+	mw.RequireAuth = api.requireAuth
+	api.wsUpgrader = websocket.Upgrader{CheckOrigin: mw.CheckOrigin}
+	if api.requireAuth {
+		api.wsUpgrader.Subprotocols = []string{api.apiToken, "Bearer " + api.apiToken}
+	}
 	api.wsClients = make(map[*WSClient]struct{})
-    // 队列大小可通过环境变量配置
-    api.wsQueueSize = config.WSQueueSizeFromEnv(1024)
+	// 队列大小可通过环境变量配置
+	api.wsQueueSize = config.WSQueueSizeFromEnv(1024)
 
 	addr := fmt.Sprintf(":%d", port)
 	if api.bindAddr != "" {
@@ -81,17 +82,21 @@ func NewAlertAPI(alertManager *AlertManager, port int, storage Storage, eventCon
 			addr = fmt.Sprintf("%s:%d", api.bindAddr, port)
 		}
 	}
-    base := mw.Wrap(mux)
-    normalizer := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        p := r.URL.Path
-        for strings.Contains(p, "//") { p = strings.ReplaceAll(p, "//", "/") }
-        p = path.Clean(p)
-        if p == "." { p = "/" }
-        r2 := r.Clone(r.Context())
-        r2.URL.Path = p
-        base.ServeHTTP(w, r2)
-    })
-    api.server = &http.Server{Addr: addr, Handler: normalizer}
+	base := mw.Wrap(mux)
+	normalizer := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		for strings.Contains(p, "//") {
+			p = strings.ReplaceAll(p, "//", "/")
+		}
+		p = path.Clean(p)
+		if p == "." {
+			p = "/"
+		}
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = p
+		base.ServeHTTP(w, r2)
+	})
+	api.server = &http.Server{Addr: addr, Handler: normalizer}
 
 	return api
 }
@@ -127,39 +132,41 @@ func (api *AlertAPI) removeWSClient(client *WSClient) {
 }
 
 func (api *AlertAPI) wsWritePump(client *WSClient) {
-    pingTicker := time.NewTicker(30 * time.Second)
-    defer pingTicker.Stop()
-    for {
-        select {
-        case msg, ok := <-client.Send:
-            if !ok { return }
-            _ = client.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-            if err := client.Conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-                if !(errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") || strings.Contains(strings.ToLower(err.Error()), "broken pipe")) {
-                    log.Printf("WebSocket 写入失败，移除客户端: %v", err)
-                }
-                api.removeWSClient(client)
-                return
-            }
-        case <-pingTicker.C:
-            _ = client.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-            if err := client.Conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
-                api.removeWSClient(client)
-                return
-            }
-        }
-    }
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
+	for {
+		select {
+		case msg, ok := <-client.Send:
+			if !ok {
+				return
+			}
+			_ = client.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := client.Conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				if !(errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") || strings.Contains(strings.ToLower(err.Error()), "broken pipe")) {
+					log.Printf("WebSocket 写入失败，移除客户端: %v", err)
+				}
+				api.removeWSClient(client)
+				return
+			}
+		case <-pingTicker.C:
+			_ = client.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := client.Conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+				api.removeWSClient(client)
+				return
+			}
+		}
+	}
 }
 
 func (api *AlertAPI) wsReadPump(client *WSClient) {
-    _ = client.Conn.SetReadDeadline(time.Now().Add(90 * time.Second))
-    client.Conn.SetPongHandler(func(string) error { _ = client.Conn.SetReadDeadline(time.Now().Add(90 * time.Second)); return nil })
-    for {
-        if _, _, err := client.Conn.ReadMessage(); err != nil {
-            api.removeWSClient(client)
-            return
-        }
-    }
+	_ = client.Conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+	client.Conn.SetPongHandler(func(string) error { _ = client.Conn.SetReadDeadline(time.Now().Add(90 * time.Second)); return nil })
+	for {
+		if _, _, err := client.Conn.ReadMessage(); err != nil {
+			api.removeWSClient(client)
+			return
+		}
+	}
 }
 
 // Start 启动API服务器
@@ -170,8 +177,6 @@ func (api *AlertAPI) Start() error {
 
 // Stop 停止API服务器
 func (api *AlertAPI) Stop() error { return api.server.Close() }
-
- 
 
 // 处理告警列表请求
 func (api *AlertAPI) handleAlerts(w http.ResponseWriter, r *http.Request) {
@@ -300,56 +305,6 @@ func (api *AlertAPI) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
-}
-
-// 处理图谱子图查询
-func (api *AlertAPI) handleGraphSubgraph(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// 解析查询参数
-	pidStr := r.URL.Query().Get("pid")
-	chainID := r.URL.Query().Get("chain_id")
-	maxNodes := 200
-	if v := strings.TrimSpace(r.URL.Query().Get("max_nodes")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 5000 {
-			maxNodes = n
-		}
-	}
-	var sincePtr, untilPtr *time.Time
-	if v := r.URL.Query().Get("since"); v != "" {
-		if ts, err := time.Parse(time.RFC3339, v); err == nil {
-			sincePtr = &ts
-		}
-	}
-	if v := r.URL.Query().Get("until"); v != "" {
-		if ts, err := time.Parse(time.RFC3339, v); err == nil {
-			untilPtr = &ts
-		}
-	}
-
-	opts := SubgraphOptions{Since: sincePtr, Until: untilPtr, MaxNodes: maxNodes}
-	var g *Subgraph
-	if pidStr != "" {
-		if pid, err := strconv.Atoi(pidStr); err == nil && pid >= 0 {
-			g = BuildSubgraphByPID(api.eventContext, uint32(pid), opts)
-		}
-	}
-	if g == nil && chainID != "" {
-		g = BuildSubgraphByChainID(api.eventContext, chainID, opts)
-	}
-	if g == nil {
-		g = &Subgraph{Nodes: []GraphNode{}, Edges: []GraphEdge{}}
-		g.finalize()
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"graph":     g,
-		"timestamp": time.Now().Format(time.RFC3339),
-	})
 }
 
 // 处理告警详情请求
@@ -605,12 +560,12 @@ func (api *AlertAPI) computeAlertStats() *AlertStats {
 
 // broadcast 将payload广播到所有WebSocket客户端（带反压：队列满时丢弃最旧消息以保障实时性）
 func (api *AlertAPI) broadcast(payload interface{}) {
-    data := mustJSON(payload)
-    api.wsMutex.Lock()
-    for client := range api.wsClients {
-        api.enqueueNonBlocking(client, data)
-    }
-    api.wsMutex.Unlock()
+	data := mustJSON(payload)
+	api.wsMutex.Lock()
+	for client := range api.wsClients {
+		api.enqueueNonBlocking(client, data)
+	}
+	api.wsMutex.Unlock()
 }
 
 // BroadcastAlert 推送新告警并同时推送最新统计
@@ -625,52 +580,36 @@ func (api *AlertAPI) BroadcastAlert(alert *ManagedAlert) {
 	}
 }
 
-// BroadcastEvent 推送原始事件（用于前端展示与实时数据流）
-func (api *AlertAPI) BroadcastEvent(event *EventJSON) {
-	if event == nil {
-		return
-	}
-	api.broadcast(map[string]interface{}{"type": "event", "ts": time.Now().Format(time.RFC3339), "data": event})
-}
-
-// BroadcastGraphUpdate 推送图谱增量（用于前端 D3 可视化实时更新）
-func (api *AlertAPI) BroadcastGraphUpdate(update *GraphUpdate) {
-	if update == nil {
-		return
-	}
-	api.broadcast(map[string]interface{}{"type": "graph_update", "ts": time.Now().Format(time.RFC3339), "data": update})
-}
-
 func (api *AlertAPI) writeWS(conn *websocket.Conn, payload interface{}) error {
-    data := mustJSON(payload)
-    _ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-    return conn.WriteMessage(websocket.TextMessage, data)
+	data := mustJSON(payload)
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
 // handleWebSocket 客户端连接与初始化数据推送
 func (api *AlertAPI) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-    conn, err := api.wsUpgrader.Upgrade(w, r, nil)
-    if err != nil {
-        log.Printf("WebSocket升级失败: %v", err)
-        return
-    }
-    client := api.addWSClient(conn)
-    go api.wsReadPump(client)
+	conn, err := api.wsUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("WebSocket升级失败: %v", err)
+		return
+	}
+	client := api.addWSClient(conn)
+	go api.wsReadPump(client)
 
 	// 初始推送统计与最近告警（仅发给当前客户端）
-    if stats := api.computeAlertStats(); stats != nil {
-        api.enqueueNonBlocking(client, mustJSON(map[string]interface{}{"type": "stats", "ts": time.Now().Format(time.RFC3339), "data": stats}))
-    }
+	if stats := api.computeAlertStats(); stats != nil {
+		api.enqueueNonBlocking(client, mustJSON(map[string]interface{}{"type": "stats", "ts": time.Now().Format(time.RFC3339), "data": stats}))
+	}
 	if api.storage != nil {
 		if alerts, _, err := api.storage.QueryAlerts(map[string]interface{}{"status": string(AlertStatusNew)}, 1, 10); err == nil {
-            for _, a := range alerts {
-                api.enqueueNonBlocking(client, mustJSON(map[string]interface{}{"type": "alert", "ts": time.Now().Format(time.RFC3339), "data": a}))
-            }
+			for _, a := range alerts {
+				api.enqueueNonBlocking(client, mustJSON(map[string]interface{}{"type": "alert", "ts": time.Now().Format(time.RFC3339), "data": a}))
+			}
 		}
 	} else {
-        for _, a := range api.alertManager.GetActiveAlerts(map[string]interface{}{}) {
-            api.enqueueNonBlocking(client, mustJSON(map[string]interface{}{"type": "alert", "ts": time.Now().Format(time.RFC3339), "data": a}))
-        }
+		for _, a := range api.alertManager.GetActiveAlerts(map[string]interface{}{}) {
+			api.enqueueNonBlocking(client, mustJSON(map[string]interface{}{"type": "alert", "ts": time.Now().Format(time.RFC3339), "data": a}))
+		}
 	}
 
 	// 读取循环仅用于保持连接与处理关闭
@@ -690,36 +629,46 @@ func (api *AlertAPI) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // mustJSON 辅助：序列化为 JSON 文本；失败返回空字节切片
 func mustJSON(v interface{}) []byte {
-    b, err := json.Marshal(v)
-    if err != nil {
-        return []byte{}
-    }
-    return b
+	b, err := json.Marshal(v)
+	if err != nil {
+		return []byte{}
+	}
+	return b
 }
 
 func (api *AlertAPI) enqueueNonBlocking(client *WSClient, data []byte) {
-    select {
-    case client.Send <- data:
-        return
-    default:
-        select {
-        case <-client.Send:
-        default:
-        }
-        select {
-        case client.Send <- data:
-        default:
-        }
-    }
+	select {
+	case client.Send <- data:
+		return
+	default:
+		select {
+		case <-client.Send:
+		default:
+		}
+		select {
+		case client.Send <- data:
+		default:
+		}
+	}
 }
 
 func (api *AlertAPI) HandleAlerts(w http.ResponseWriter, r *http.Request) { api.handleAlerts(w, r) }
-func (api *AlertAPI) HandleAlertDetail(w http.ResponseWriter, r *http.Request) { api.handleAlertDetail(w, r) }
-func (api *AlertAPI) HandleAlertStats(w http.ResponseWriter, r *http.Request) { api.handleAlertStats(w, r) }
-func (api *AlertAPI) HandleAttackChains(w http.ResponseWriter, r *http.Request) { api.handleAttackChains(w, r) }
+func (api *AlertAPI) HandleAlertDetail(w http.ResponseWriter, r *http.Request) {
+	api.handleAlertDetail(w, r)
+}
+func (api *AlertAPI) HandleAlertStats(w http.ResponseWriter, r *http.Request) {
+	api.handleAlertStats(w, r)
+}
+func (api *AlertAPI) HandleAttackChains(w http.ResponseWriter, r *http.Request) {
+	api.handleAttackChains(w, r)
+}
+func (api *AlertAPI) HandleAttackChainGraph(w http.ResponseWriter, r *http.Request) {
+	api.handleAttackChainGraph(w, r)
+}
 func (api *AlertAPI) HandleEvents(w http.ResponseWriter, r *http.Request) { api.handleEvents(w, r) }
-func (api *AlertAPI) HandleGraphSubgraph(w http.ResponseWriter, r *http.Request) { api.handleGraphSubgraph(w, r) }
-func (api *AlertAPI) HandleWebSocket(w http.ResponseWriter, r *http.Request) { api.handleWebSocket(w, r) }
+func (api *AlertAPI) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
+	api.handleWebSocket(w, r)
+}
 
 // 处理攻击链请求
 func (api *AlertAPI) handleAttackChains(w http.ResponseWriter, r *http.Request) {
@@ -727,22 +676,31 @@ func (api *AlertAPI) handleAttackChains(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	// 获取攻击链处理器
-	var attackChainProcessor *AttackChainProcessor
-	if processor, exists := api.alertManager.processors["attack_chain"]; exists {
-		if acp, ok := processor.(*AttackChainProcessor); ok {
-			attackChainProcessor = acp
-		}
-	}
-
-	if attackChainProcessor == nil {
-		http.Error(w, "Attack chain processor not found", http.StatusNotFound)
+	if api.eventContext == nil {
+		http.Error(w, "Event context not initialized", http.StatusServiceUnavailable)
 		return
 	}
-
-	chains := attackChainProcessor.GetAttackChains()
+	chains := api.eventContext.GetAttackChains()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(chains)
+}
+
+func (api *AlertAPI) handleAttackChainGraph(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if api.eventContext == nil {
+		http.Error(w, "Event context not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	chainID := r.URL.Query().Get("chain_id")
+	if chainID != "" && api.eventContext.GetAttackChain(chainID) == nil {
+		http.Error(w, "Attack chain not found", http.StatusNotFound)
+		return
+	}
+	graph := api.eventContext.BuildAttackGraph(chainID)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(graph)
 }

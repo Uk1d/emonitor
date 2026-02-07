@@ -1,17 +1,17 @@
 package main
 
 import (
-    "bufio"
-    "encoding/json"
-    "fmt"
-    "log"
-    "os"
-    "path/filepath"
-    "sort"
-    "strconv"
-    "strings"
-    "sync"
-    "time"
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 )
 
 // EventContext 事件上下文管理器
@@ -151,6 +151,51 @@ type AttackChain struct {
 
 	// 关联的告警
 	Alerts []string `json:"alerts"`
+}
+
+type AttackChainSummary struct {
+	ChainID      string    `json:"chain_id"`
+	StartTime    time.Time `json:"start_time"`
+	LastUpdate   time.Time `json:"last_update"`
+	Status       string    `json:"status"`
+	Severity     string    `json:"severity"`
+	CurrentStage string    `json:"current_stage"`
+	RiskLevel    string    `json:"risk_level"`
+}
+
+type AttackGraph struct {
+	GeneratedAt time.Time            `json:"generated_at"`
+	Nodes       []GraphNode          `json:"nodes"`
+	Links       []GraphLink          `json:"links"`
+	Timeline    []GraphTimelineEvent `json:"timeline"`
+	Chains      []AttackChainSummary `json:"chains"`
+}
+
+type GraphNode struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Label    string `json:"label"`
+	ChainID  string `json:"chain_id,omitempty"`
+	Severity string `json:"severity,omitempty"`
+	Status   string `json:"status,omitempty"`
+	Stage    string `json:"stage,omitempty"`
+}
+
+type GraphLink struct {
+	Source  string `json:"source"`
+	Target  string `json:"target"`
+	Type    string `json:"type"`
+	ChainID string `json:"chain_id,omitempty"`
+}
+
+type GraphTimelineEvent struct {
+	ID          string    `json:"id"`
+	ChainID     string    `json:"chain_id"`
+	Stage       string    `json:"stage"`
+	Technique   string    `json:"technique,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
+	Severity    string    `json:"severity,omitempty"`
+	Description string    `json:"description,omitempty"`
 }
 
 // 辅助数据结构
@@ -344,38 +389,38 @@ func NewEventContext(config *EventContextConfig) *EventContext {
 // readPPIDFromProc 通过读取 /proc/<pid>/status 获取父进程 PPID（Linux 环境兜底）
 // 若不在 Linux 或读取失败，返回 0 不影响正常流程
 func readPPIDFromProc(pid uint32) (uint32, error) {
-    // Windows/非 Linux 环境可能不存在 /proc；打开失败直接返回
-    path := fmt.Sprintf("/proc/%d/status", pid)
-    f, err := os.Open(path)
-    if err != nil {
-        return 0, err
-    }
-    defer f.Close()
+	// Windows/非 Linux 环境可能不存在 /proc；打开失败直接返回
+	path := fmt.Sprintf("/proc/%d/status", pid)
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
 
-    scanner := bufio.NewScanner(f)
-    for scanner.Scan() {
-        line := scanner.Text()
-        if strings.HasPrefix(line, "PPid:") {
-            fields := strings.Fields(line)
-            if len(fields) >= 2 {
-                v, err := strconv.Atoi(fields[1])
-                if err == nil && v >= 0 {
-                    return uint32(v), nil
-                }
-            }
-            break
-        }
-    }
-    if err := scanner.Err(); err != nil {
-        return 0, err
-    }
-    return 0, fmt.Errorf("PPid not found in status")
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "PPid:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				v, err := strconv.Atoi(fields[1])
+				if err == nil && v >= 0 {
+					return uint32(v), nil
+				}
+			}
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, err
+	}
+	return 0, fmt.Errorf("PPid not found in status")
 }
 
 // UpdateProcessContext 更新进程上下文
 func (ec *EventContext) UpdateProcessContext(event *EventJSON) {
-    ec.mutex.Lock()
-    defer ec.mutex.Unlock()
+	ec.mutex.Lock()
+	defer ec.mutex.Unlock()
 
 	ctx, exists := ec.processContexts[event.PID]
 	if !exists {
@@ -398,55 +443,55 @@ func (ec *EventContext) UpdateProcessContext(event *EventJSON) {
 			Annotations:      make(map[string]interface{}),
 		}
 		ec.processContexts[event.PID] = ctx
-    }
+	}
 
-    ctx.LastActivity = time.Now()
+	ctx.LastActivity = time.Now()
 
-    // 事件缺少命令行且上下文已有，进行回填，增强可读性
-    if event.Cmdline == "" && ctx.Cmdline != "" {
-        event.Cmdline = ctx.Cmdline
-    }
+	// 事件缺少命令行且上下文已有，进行回填，增强可读性
+	if event.Cmdline == "" && ctx.Cmdline != "" {
+		event.Cmdline = ctx.Cmdline
+	}
 
-    // PPID 兜底与回填逻辑：优先使用已有上下文，其次事件值，最后尝试从 /proc 读取
-    if ctx.PPID == 0 || event.PPID == 0 {
-        var candidate uint32
-        // 优先已有上下文
-        if ctx.PPID != 0 {
-            candidate = ctx.PPID
-        } else if event.PPID != 0 {
-            candidate = event.PPID
-        } else {
-            if ppid, err := readPPIDFromProc(event.PID); err == nil && ppid != 0 {
-                candidate = ppid
-            }
-        }
-        if candidate != 0 {
-            if ctx.PPID == 0 {
-                ctx.PPID = candidate
-            }
-            if event.PPID == 0 {
-                event.PPID = candidate
-            }
-        }
-    }
+	// PPID 兜底与回填逻辑：优先使用已有上下文，其次事件值，最后尝试从 /proc 读取
+	if ctx.PPID == 0 || event.PPID == 0 {
+		var candidate uint32
+		// 优先已有上下文
+		if ctx.PPID != 0 {
+			candidate = ctx.PPID
+		} else if event.PPID != 0 {
+			candidate = event.PPID
+		} else {
+			if ppid, err := readPPIDFromProc(event.PID); err == nil && ppid != 0 {
+				candidate = ppid
+			}
+		}
+		if candidate != 0 {
+			if ctx.PPID == 0 {
+				ctx.PPID = candidate
+			}
+			if event.PPID == 0 {
+				event.PPID = candidate
+			}
+		}
+	}
 
-    // 维护父子进程映射，增强链路关联能力
-    if event.PPID != 0 {
-        if parentCtx, ok := ec.processContexts[event.PPID]; ok {
-            // 去重追加子进程
-            found := false
-            for _, child := range parentCtx.ChildProcesses {
-                if child == event.PID {
-                    found = true
-                    break
-                }
-            }
-            if !found {
-                parentCtx.ChildProcesses = append(parentCtx.ChildProcesses, event.PID)
-            }
-            parentCtx.LastActivity = time.Now()
-        }
-    }
+	// 维护父子进程映射，增强链路关联能力
+	if event.PPID != 0 {
+		if parentCtx, ok := ec.processContexts[event.PPID]; ok {
+			// 去重追加子进程
+			found := false
+			for _, child := range parentCtx.ChildProcesses {
+				if child == event.PID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				parentCtx.ChildProcesses = append(parentCtx.ChildProcesses, event.PID)
+			}
+			parentCtx.LastActivity = time.Now()
+		}
+	}
 
 	// 根据事件类型更新上下文
 	switch event.EventType {
@@ -492,87 +537,87 @@ func (ec *EventContext) UpdateProcessContext(event *EventJSON) {
 	}
 	ctx.SystemCalls = append(ctx.SystemCalls, syscallInfo)
 
-    // 限制历史记录长度
-    if len(ctx.FileOperations) > 1000 {
-        ctx.FileOperations = ctx.FileOperations[len(ctx.FileOperations)-500:]
-    }
-    if len(ctx.NetworkActivity) > 1000 {
-        ctx.NetworkActivity = ctx.NetworkActivity[len(ctx.NetworkActivity)-500:]
-    }
-    if len(ctx.SystemCalls) > 2000 {
-        ctx.SystemCalls = ctx.SystemCalls[len(ctx.SystemCalls)-1000:]
-    }
+	// 限制历史记录长度
+	if len(ctx.FileOperations) > 1000 {
+		ctx.FileOperations = ctx.FileOperations[len(ctx.FileOperations)-500:]
+	}
+	if len(ctx.NetworkActivity) > 1000 {
+		ctx.NetworkActivity = ctx.NetworkActivity[len(ctx.NetworkActivity)-500:]
+	}
+	if len(ctx.SystemCalls) > 2000 {
+		ctx.SystemCalls = ctx.SystemCalls[len(ctx.SystemCalls)-1000:]
+	}
 }
 
 // UpdateNetworkContext 更新网络连接上下文
 func (ec *EventContext) UpdateNetworkContext(event *EventJSON) {
-    // 允许仅有Dst或仅有Src的典型事件（connect常见仅Dst；bind常见仅Src）
-    if event.DstAddr == nil && event.SrcAddr == nil {
-        return
-    }
+	// 允许仅有Dst或仅有Src的典型事件（connect常见仅Dst；bind常见仅Src）
+	if event.DstAddr == nil && event.SrcAddr == nil {
+		return
+	}
 
-    ec.mutex.Lock()
-    defer ec.mutex.Unlock()
+	ec.mutex.Lock()
+	defer ec.mutex.Unlock()
 
-    // 连接ID：尽量稳定，优先使用完整地址；缺失时以pid与问号占位避免冲突
-    localIP := "?"
-    localPort := uint16(0)
-    remoteIP := "?"
-    remotePort := uint16(0)
-    if event.SrcAddr != nil {
-        localIP = event.SrcAddr.IP
-        localPort = event.SrcAddr.Port
-    }
-    if event.DstAddr != nil {
-        remoteIP = event.DstAddr.IP
-        remotePort = event.DstAddr.Port
-    }
-    connID := fmt.Sprintf("pid:%d %s:%d->%s:%d", event.PID, localIP, localPort, remoteIP, remotePort)
+	// 连接ID：尽量稳定，优先使用完整地址；缺失时以pid与问号占位避免冲突
+	localIP := "?"
+	localPort := uint16(0)
+	remoteIP := "?"
+	remotePort := uint16(0)
+	if event.SrcAddr != nil {
+		localIP = event.SrcAddr.IP
+		localPort = event.SrcAddr.Port
+	}
+	if event.DstAddr != nil {
+		remoteIP = event.DstAddr.IP
+		remotePort = event.DstAddr.Port
+	}
+	connID := fmt.Sprintf("pid:%d %s:%d->%s:%d", event.PID, localIP, localPort, remoteIP, remotePort)
 
-    ctx, exists := ec.networkContexts[connID]
-    if !exists {
-        ctx = &NetworkContext{
-            ConnectionID: connID,
-            Protocol:     "tcp",
-            LocalAddr:    localIP,
-            RemoteAddr:   remoteIP,
-            LocalPort:    localPort,
-            RemotePort:   remotePort,
-            State:        "observed",
-            StartTime:    time.Now(),
-            ProcessPID:   event.PID,
-            ProcessComm:  event.Comm,
-            ThreatLevel:  "unknown",
-            IOCMatches:   make([]IOCMatch, 0),
-        }
-        ec.networkContexts[connID] = ctx
-    } else {
-        // 回填可能缺失的地址
-        if ctx.LocalAddr == "?" && event.SrcAddr != nil {
-            ctx.LocalAddr = event.SrcAddr.IP
-            ctx.LocalPort = event.SrcAddr.Port
-        }
-        if ctx.RemoteAddr == "?" && event.DstAddr != nil {
-            ctx.RemoteAddr = event.DstAddr.IP
-            ctx.RemotePort = event.DstAddr.Port
-        }
-    }
+	ctx, exists := ec.networkContexts[connID]
+	if !exists {
+		ctx = &NetworkContext{
+			ConnectionID: connID,
+			Protocol:     "tcp",
+			LocalAddr:    localIP,
+			RemoteAddr:   remoteIP,
+			LocalPort:    localPort,
+			RemotePort:   remotePort,
+			State:        "observed",
+			StartTime:    time.Now(),
+			ProcessPID:   event.PID,
+			ProcessComm:  event.Comm,
+			ThreatLevel:  "unknown",
+			IOCMatches:   make([]IOCMatch, 0),
+		}
+		ec.networkContexts[connID] = ctx
+	} else {
+		// 回填可能缺失的地址
+		if ctx.LocalAddr == "?" && event.SrcAddr != nil {
+			ctx.LocalAddr = event.SrcAddr.IP
+			ctx.LocalPort = event.SrcAddr.Port
+		}
+		if ctx.RemoteAddr == "?" && event.DstAddr != nil {
+			ctx.RemoteAddr = event.DstAddr.IP
+			ctx.RemotePort = event.DstAddr.Port
+		}
+	}
 
-    ctx.LastActivity = time.Now()
+	ctx.LastActivity = time.Now()
 
-    // 更新连接状态
-    switch event.EventType {
-    case "connect":
-        ctx.State = "connected"
-    case "bind":
-        ctx.State = "bound"
-    case "listen":
-        ctx.State = "listening"
-    case "accept":
-        ctx.State = "accepted"
-    case "close":
-        ctx.State = "closed"
-    }
+	// 更新连接状态
+	switch event.EventType {
+	case "connect":
+		ctx.State = "connected"
+	case "bind":
+		ctx.State = "bound"
+	case "listen":
+		ctx.State = "listening"
+	case "accept":
+		ctx.State = "accepted"
+	case "close":
+		ctx.State = "closed"
+	}
 }
 
 // UpdateFileContext 更新文件操作上下文
@@ -626,9 +671,9 @@ func (ec *EventContext) UpdateFileContext(event *EventJSON) {
 
 // DetectAttackChain 检测攻击链
 func (ec *EventContext) DetectAttackChain(event *EventJSON, alert *AlertEvent) {
-    if !ec.config.EnableAttackChainDetection {
-        return
-    }
+	if !ec.config.EnableAttackChainDetection {
+		return
+	}
 
 	ec.mutex.Lock()
 	defer ec.mutex.Unlock()
@@ -642,32 +687,32 @@ func (ec *EventContext) DetectAttackChain(event *EventJSON, alert *AlertEvent) {
 		}
 	}
 
-    // 如果没有找到相关攻击链：
-    // - 有告警则创建新链；
-    // - 无告警则仅返回，不创建新链（避免噪声事件泛滥生成链）。
-    if relatedChain == nil {
-        if alert == nil {
-            return
-        }
-        chainID := fmt.Sprintf("chain_%d_%s", event.PID, time.Now().Format("20060102150405"))
-        relatedChain = &AttackChain{
-            ChainID: chainID,
-            ID:      chainID,
-            StartTime:         time.Now(),
-            LastUpdate:        time.Now(),
-            Status:            "active",
-            Severity:          alert.Severity,
-            Stages:            make([]AttackStage, 0),
-            CurrentStage:      "initial",
-            InvolvedProcesses: []uint32{event.PID},
-            InvolvedFiles:     make([]string, 0),
-            InvolvedNetworks:  make([]string, 0),
-            Techniques:        make([]MITRETechnique, 0),
-            Tactics:           make([]string, 0),
-            IOCs:              make([]IOCMatch, 0),
-        }
-        ec.attackChains[chainID] = relatedChain
-    }
+	// 如果没有找到相关攻击链：
+	// - 有告警则创建新链；
+	// - 无告警则仅返回，不创建新链（避免噪声事件泛滥生成链）。
+	if relatedChain == nil {
+		if alert == nil {
+			return
+		}
+		chainID := fmt.Sprintf("chain_%d_%s", event.PID, time.Now().Format("20060102150405"))
+		relatedChain = &AttackChain{
+			ChainID:           chainID,
+			ID:                chainID,
+			StartTime:         time.Now(),
+			LastUpdate:        time.Now(),
+			Status:            "active",
+			Severity:          alert.Severity,
+			Stages:            make([]AttackStage, 0),
+			CurrentStage:      "initial",
+			InvolvedProcesses: []uint32{event.PID},
+			InvolvedFiles:     make([]string, 0),
+			InvolvedNetworks:  make([]string, 0),
+			Techniques:        make([]MITRETechnique, 0),
+			Tactics:           make([]string, 0),
+			IOCs:              make([]IOCMatch, 0),
+		}
+		ec.attackChains[chainID] = relatedChain
+	}
 
 	// 更新攻击链
 	relatedChain.LastUpdate = time.Now()
@@ -683,60 +728,60 @@ func (ec *EventContext) DetectAttackChain(event *EventJSON, alert *AlertEvent) {
 	skipFile:
 	}
 
-    // 关联网络：同时考虑目标地址与本地地址
-    if event.DstAddr != nil {
-        networkID := fmt.Sprintf("%s:%d", event.DstAddr.IP, event.DstAddr.Port)
-        for _, network := range relatedChain.InvolvedNetworks {
-            if network == networkID {
-                goto skipNetworkDst
-            }
-        }
-        relatedChain.InvolvedNetworks = append(relatedChain.InvolvedNetworks, networkID)
-    skipNetworkDst:
-    }
-    if event.SrcAddr != nil {
-        networkID := fmt.Sprintf("%s:%d", event.SrcAddr.IP, event.SrcAddr.Port)
-        for _, network := range relatedChain.InvolvedNetworks {
-            if network == networkID {
-                goto skipNetworkSrc
-            }
-        }
-        relatedChain.InvolvedNetworks = append(relatedChain.InvolvedNetworks, networkID)
-    skipNetworkSrc:
-    }
+	// 关联网络：同时考虑目标地址与本地地址
+	if event.DstAddr != nil {
+		networkID := fmt.Sprintf("%s:%d", event.DstAddr.IP, event.DstAddr.Port)
+		for _, network := range relatedChain.InvolvedNetworks {
+			if network == networkID {
+				goto skipNetworkDst
+			}
+		}
+		relatedChain.InvolvedNetworks = append(relatedChain.InvolvedNetworks, networkID)
+	skipNetworkDst:
+	}
+	if event.SrcAddr != nil {
+		networkID := fmt.Sprintf("%s:%d", event.SrcAddr.IP, event.SrcAddr.Port)
+		for _, network := range relatedChain.InvolvedNetworks {
+			if network == networkID {
+				goto skipNetworkSrc
+			}
+		}
+		relatedChain.InvolvedNetworks = append(relatedChain.InvolvedNetworks, networkID)
+	skipNetworkSrc:
+	}
 
-    // 当无告警时不进行技术映射，以减少误报噪声
-    if alert != nil {
-        technique := ec.mapToMITRETechnique(event, alert)
-        if technique != nil {
-            relatedChain.Techniques = append(relatedChain.Techniques, *technique)
-        }
-    }
+	// 当无告警时不进行技术映射，以减少误报噪声
+	if alert != nil {
+		technique := ec.mapToMITRETechnique(event, alert)
+		if technique != nil {
+			relatedChain.Techniques = append(relatedChain.Techniques, *technique)
+		}
+	}
 
-    // 更新攻击阶段
-    stage := ec.determineAttackStage(event, alert)
-    if stage != relatedChain.CurrentStage {
-        // 无告警时，Technique/Description使用事件类型与通用描述
-        tech := ""
-        desc := ""
-        if alert != nil {
-            tech = alert.RuleName
-            desc = alert.Description
-        } else {
-            tech = event.EventType
-            desc = "事件观察"
-        }
-        newStage := AttackStage{
-            Stage:       stage,
-            Technique:   tech,
-            Description: desc,
-            StartTime:   time.Now(),
-            Events:      []string{fmt.Sprintf("%s_%d", event.EventType, event.PID)},
-            Indicators:  make([]ThreatIndicator, 0),
-        }
-        relatedChain.Stages = append(relatedChain.Stages, newStage)
-        relatedChain.CurrentStage = stage
-    }
+	// 更新攻击阶段
+	stage := ec.determineAttackStage(event, alert)
+	if stage != relatedChain.CurrentStage {
+		// 无告警时，Technique/Description使用事件类型与通用描述
+		tech := ""
+		desc := ""
+		if alert != nil {
+			tech = alert.RuleName
+			desc = alert.Description
+		} else {
+			tech = event.EventType
+			desc = "事件观察"
+		}
+		newStage := AttackStage{
+			Stage:       stage,
+			Technique:   tech,
+			Description: desc,
+			StartTime:   time.Now(),
+			Events:      []string{fmt.Sprintf("%s_%d", event.EventType, event.PID)},
+			Indicators:  make([]ThreatIndicator, 0),
+		}
+		relatedChain.Stages = append(relatedChain.Stages, newStage)
+		relatedChain.CurrentStage = stage
+	}
 
 	// 计算影响和置信度分数
 	relatedChain.ImpactScore = ec.calculateImpactScore(relatedChain)
@@ -768,6 +813,205 @@ func (ec *EventContext) GetAttackChains() []*AttackChain {
 	})
 
 	return chains
+}
+
+func (ec *EventContext) GetAttackChain(chainID string) *AttackChain {
+	ec.mutex.RLock()
+	defer ec.mutex.RUnlock()
+	return ec.attackChains[chainID]
+}
+
+func (ec *EventContext) BuildAttackGraph(chainID string) *AttackGraph {
+	ec.mutex.RLock()
+	defer ec.mutex.RUnlock()
+
+	graph := &AttackGraph{
+		GeneratedAt: time.Now(),
+		Nodes:       make([]GraphNode, 0),
+		Links:       make([]GraphLink, 0),
+		Timeline:    make([]GraphTimelineEvent, 0),
+		Chains:      make([]AttackChainSummary, 0),
+	}
+
+	nodeIndex := make(map[string]GraphNode)
+	linkIndex := make(map[string]struct{})
+
+	addNode := func(node GraphNode) {
+		if node.ID == "" {
+			return
+		}
+		if _, ok := nodeIndex[node.ID]; ok {
+			return
+		}
+		nodeIndex[node.ID] = node
+	}
+
+	addLink := func(source, target, linkType, chain string) {
+		if source == "" || target == "" {
+			return
+		}
+		key := source + "->" + target + ":" + linkType + ":" + chain
+		if _, ok := linkIndex[key]; ok {
+			return
+		}
+		linkIndex[key] = struct{}{}
+		graph.Links = append(graph.Links, GraphLink{
+			Source:  source,
+			Target:  target,
+			Type:    linkType,
+			ChainID: chain,
+		})
+	}
+
+	selectedChains := make([]*AttackChain, 0)
+	if chainID != "" {
+		if chain, ok := ec.attackChains[chainID]; ok && chain != nil {
+			selectedChains = append(selectedChains, chain)
+		}
+	} else {
+		for _, chain := range ec.attackChains {
+			if chain != nil {
+				selectedChains = append(selectedChains, chain)
+			}
+		}
+	}
+
+	for _, chain := range selectedChains {
+		graph.Chains = append(graph.Chains, AttackChainSummary{
+			ChainID:      chain.ChainID,
+			StartTime:    chain.StartTime,
+			LastUpdate:   chain.LastUpdate,
+			Status:       chain.Status,
+			Severity:     chain.Severity,
+			CurrentStage: chain.CurrentStage,
+			RiskLevel:    chain.RiskLevel,
+		})
+
+		chainNodeID := "chain:" + chain.ChainID
+		addNode(GraphNode{
+			ID:       chainNodeID,
+			Type:     "chain",
+			Label:    chain.ChainID,
+			ChainID:  chain.ChainID,
+			Severity: chain.Severity,
+			Status:   chain.Status,
+			Stage:    chain.CurrentStage,
+		})
+
+		for _, pid := range chain.InvolvedProcesses {
+			procID := fmt.Sprintf("proc:%d", pid)
+			addNode(GraphNode{
+				ID:      procID,
+				Type:    "process",
+				Label:   fmt.Sprintf("PID %d", pid),
+				ChainID: chain.ChainID,
+			})
+			addLink(chainNodeID, procID, "involves", chain.ChainID)
+		}
+
+		for _, file := range chain.InvolvedFiles {
+			label := filepath.Base(file)
+			if label == "" || label == "." || label == "/" {
+				label = file
+			}
+			fileID := "file:" + file
+			addNode(GraphNode{
+				ID:      fileID,
+				Type:    "file",
+				Label:   label,
+				ChainID: chain.ChainID,
+			})
+			addLink(chainNodeID, fileID, "touches", chain.ChainID)
+		}
+
+		for _, network := range chain.InvolvedNetworks {
+			netID := "net:" + network
+			addNode(GraphNode{
+				ID:      netID,
+				Type:    "network",
+				Label:   network,
+				ChainID: chain.ChainID,
+			})
+			addLink(chainNodeID, netID, "connects", chain.ChainID)
+		}
+
+		for _, stage := range chain.Stages {
+			stageID := "stage:" + chain.ChainID + ":" + stage.Stage
+			addNode(GraphNode{
+				ID:      stageID,
+				Type:    "stage",
+				Label:   stage.Stage,
+				ChainID: chain.ChainID,
+				Stage:   stage.Stage,
+			})
+			addLink(chainNodeID, stageID, "stage", chain.ChainID)
+
+			if stage.Technique != "" {
+				techID := "tech:" + chain.ChainID + ":" + stage.Technique
+				addNode(GraphNode{
+					ID:      techID,
+					Type:    "technique",
+					Label:   stage.Technique,
+					ChainID: chain.ChainID,
+				})
+				addLink(stageID, techID, "uses", chain.ChainID)
+			}
+
+			timelineID := fmt.Sprintf("timeline:%s:%s:%d", chain.ChainID, stage.Stage, stage.StartTime.UnixNano())
+			graph.Timeline = append(graph.Timeline, GraphTimelineEvent{
+				ID:          timelineID,
+				ChainID:     chain.ChainID,
+				Stage:       stage.Stage,
+				Technique:   stage.Technique,
+				Timestamp:   stage.StartTime,
+				Severity:    chain.Severity,
+				Description: stage.Description,
+			})
+		}
+
+		for _, tech := range chain.Techniques {
+			techKey := tech.TechniqueID
+			if techKey == "" {
+				techKey = tech.TechniqueName
+			}
+			techID := "mitre:" + techKey
+			label := tech.TechniqueName
+			if label == "" {
+				label = tech.TechniqueID
+			}
+			addNode(GraphNode{
+				ID:      techID,
+				Type:    "mitre",
+				Label:   label,
+				ChainID: chain.ChainID,
+			})
+			addLink(chainNodeID, techID, "technique", chain.ChainID)
+			if tech.Tactic != "" {
+				tacticID := "tactic:" + tech.Tactic
+				addNode(GraphNode{
+					ID:    tacticID,
+					Type:  "tactic",
+					Label: tech.Tactic,
+				})
+				addLink(techID, tacticID, "tactic", chain.ChainID)
+			}
+		}
+	}
+
+	nodeIDs := make([]string, 0, len(nodeIndex))
+	for id := range nodeIndex {
+		nodeIDs = append(nodeIDs, id)
+	}
+	sort.Strings(nodeIDs)
+	for _, id := range nodeIDs {
+		graph.Nodes = append(graph.Nodes, nodeIndex[id])
+	}
+
+	sort.Slice(graph.Timeline, func(i, j int) bool {
+		return graph.Timeline[i].Timestamp.Before(graph.Timeline[j].Timestamp)
+	})
+
+	return graph
 }
 
 // GetProcessContextCount 获取进程上下文数量
@@ -809,23 +1053,23 @@ func (ec *EventContext) isEventRelatedToChain(event *EventJSON, chain *AttackCha
 		}
 	}
 
-    // 检查网络关联（目标或本地）
-    if event.DstAddr != nil {
-        networkID := fmt.Sprintf("%s:%d", event.DstAddr.IP, event.DstAddr.Port)
-        for _, network := range chain.InvolvedNetworks {
-            if network == networkID {
-                return true
-            }
-        }
-    }
-    if event.SrcAddr != nil {
-        networkID := fmt.Sprintf("%s:%d", event.SrcAddr.IP, event.SrcAddr.Port)
-        for _, network := range chain.InvolvedNetworks {
-            if network == networkID {
-                return true
-            }
-        }
-    }
+	// 检查网络关联（目标或本地）
+	if event.DstAddr != nil {
+		networkID := fmt.Sprintf("%s:%d", event.DstAddr.IP, event.DstAddr.Port)
+		for _, network := range chain.InvolvedNetworks {
+			if network == networkID {
+				return true
+			}
+		}
+	}
+	if event.SrcAddr != nil {
+		networkID := fmt.Sprintf("%s:%d", event.SrcAddr.IP, event.SrcAddr.Port)
+		for _, network := range chain.InvolvedNetworks {
+			if network == networkID {
+				return true
+			}
+		}
+	}
 
 	// 检查时间窗口
 	if time.Since(chain.LastUpdate) > ec.config.AttackChainTimeout {
@@ -836,10 +1080,10 @@ func (ec *EventContext) isEventRelatedToChain(event *EventJSON, chain *AttackCha
 }
 
 func (ec *EventContext) mapToMITRETechnique(event *EventJSON, alert *AlertEvent) *MITRETechnique {
-    // 无告警时不做技术映射
-    if alert == nil {
-        return nil
-    }
+	// 无告警时不做技术映射
+	if alert == nil {
+		return nil
+	}
 	// 简化的MITRE ATT&CK映射
 	techniqueMap := map[string]MITRETechnique{
 		"suspicious_execve": {
@@ -967,45 +1211,45 @@ func (ec *EventContext) mapToMITRETechnique(event *EventJSON, alert *AlertEvent)
 }
 
 func (ec *EventContext) determineAttackStage(event *EventJSON, alert *AlertEvent) string {
-    // 根据项目“事后取证与损失评估”的检测重点，使用更贴近的中文阶段
-    // 优先使用规则类别，其次回退到事件类型判断
-    if alert != nil {
-        switch alert.Category {
-        // 外联通信 / 指挥与控制
-        case "command_and_control", "network_monitoring", "command_control":
-            return "外联通信"
-        // 执行行为（进程执行/脚本执行）
-        case "execution", "execution_detection", "process_monitoring":
-            return "执行行为"
-        // 持久化（服务、定时任务、启动项、钥匙）
-        case "persistence":
-            return "持久化"
-        // 权限变更（提权/所有权/权限位调整）
-        case "privilege_escalation", "permission_changes":
-            return "权限变更"
-        // 防御规避（内存保护、混淆、关闭安全进程等）
-        case "defense_evasion", "memory_protection":
-            return "防御规避"
-        // 凭据访问
-        case "credential_access":
-            return "凭据访问"
-        // 探索/信息收集
-        case "discovery":
-            return "探索行为"
-        // 横向移动
-        case "lateral_movement":
-            return "横向移动"
-        // 数据收集/文件操作
-        case "collection", "file_monitoring":
-            return "文件操作"
-        // 数据外泄
-        case "exfiltration", "data_exfiltration":
-            return "数据外泄"
-        // 影响/破坏
-        case "impact":
-            return "破坏清理"
-        }
-    }
+	// 根据项目“事后取证与损失评估”的检测重点，使用更贴近的中文阶段
+	// 优先使用规则类别，其次回退到事件类型判断
+	if alert != nil {
+		switch alert.Category {
+		// 外联通信 / 指挥与控制
+		case "command_and_control", "network_monitoring", "command_control":
+			return "外联通信"
+		// 执行行为（进程执行/脚本执行）
+		case "execution", "execution_detection", "process_monitoring":
+			return "执行行为"
+		// 持久化（服务、定时任务、启动项、钥匙）
+		case "persistence":
+			return "持久化"
+		// 权限变更（提权/所有权/权限位调整）
+		case "privilege_escalation", "permission_changes":
+			return "权限变更"
+		// 防御规避（内存保护、混淆、关闭安全进程等）
+		case "defense_evasion", "memory_protection":
+			return "防御规避"
+		// 凭据访问
+		case "credential_access":
+			return "凭据访问"
+		// 探索/信息收集
+		case "discovery":
+			return "探索行为"
+		// 横向移动
+		case "lateral_movement":
+			return "横向移动"
+		// 数据收集/文件操作
+		case "collection", "file_monitoring":
+			return "文件操作"
+		// 数据外泄
+		case "exfiltration", "data_exfiltration":
+			return "数据外泄"
+		// 影响/破坏
+		case "impact":
+			return "破坏清理"
+		}
+	}
 
 	// 类别未知时，按事件类型回退映射
 	switch event.EventType {

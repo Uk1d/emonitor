@@ -16,7 +16,7 @@ func NewCORSMiddleware(allowedOrigins map[string]struct{}, apiToken string) *COR
     return &CORSMiddleware{
         AllowedOrigins: allowedOrigins,
         APIToken:       strings.TrimSpace(apiToken),
-        RequireAuth:    false,
+        RequireAuth:    strings.TrimSpace(apiToken) != "",
     }
 }
 
@@ -135,4 +135,3 @@ func (m *CORSMiddleware) isAuthorized(r *http.Request) bool {
     }
     return false
 }
-

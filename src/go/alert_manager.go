@@ -174,7 +174,6 @@ func NewAlertManager(config *AlertManagerConfig) *AlertManager {
 	// 注册默认处理器
 	am.RegisterProcessor(&DefaultAlertProcessor{})
 	am.RegisterProcessor(&SeverityBasedProcessor{})
-	am.RegisterProcessor(&AttackChainProcessor{})
 
 	// 注册默认通知渠道
 	am.RegisterNotificationChannel(&LogNotificationChannel{})
@@ -397,7 +396,11 @@ func (am *AlertManager) executeActions(alert *ManagedAlert) {
 		case "quarantine":
 			result.Status = "warning"
 			result.Message = "隔离动作已记录（需要额外权限）"
-			log.Printf("执行动作[QUARANTINE]: 隔离进程 - PID: %d", alert.Event.PID)
+			pid := uint32(0)
+			if alert.Event != nil {
+				pid = alert.Event.PID
+			}
+			log.Printf("执行动作[QUARANTINE]: 隔离进程 - PID: %d", pid)
 
 		case "notify":
 			result.Status = "success"
@@ -424,6 +427,9 @@ func (am *AlertManager) findSimilarAlert(newAlert *ManagedAlert) *ManagedAlert {
 		}
 
 		// 检查相似性：相同规则、相同进程、相同用户
+		if alert.Event == nil || newAlert.Event == nil {
+			continue
+		}
 		if alert.RuleName == newAlert.RuleName &&
 			alert.Event.Comm == newAlert.Event.Comm &&
 			alert.Event.UID == newAlert.Event.UID {
@@ -517,19 +523,23 @@ func (am *AlertManager) matchesFilters(alert *ManagedAlert, filters map[string]i
 	for key, value := range filters {
 		switch key {
 		case "severity":
-			if alert.Severity != value.(string) {
+			v, ok := value.(string)
+			if !ok || alert.Severity != v {
 				return false
 			}
 		case "category":
-			if alert.Category != value.(string) {
+			v, ok := value.(string)
+			if !ok || alert.Category != v {
 				return false
 			}
 		case "status":
-			if alert.Status != AlertStatus(value.(string)) {
+			v, ok := value.(string)
+			if !ok || alert.Status != AlertStatus(v) {
 				return false
 			}
 		case "rule_name":
-			if alert.RuleName != value.(string) {
+			v, ok := value.(string)
+			if !ok || alert.RuleName != v {
 				return false
 			}
 		}
