@@ -1,59 +1,233 @@
-# 构建产物
-build/
+# ==================== 构建产物 ====================
+# 二进制文件
 bin/
-*.o
-*.so
-*.a
+build/
 *.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.a
 
-# Go 相关
+# eBPF 对象文件
+*.o
+!src/bpf/*.o
+
+# 中间文件
+*.out
+*.app
+
+# ==================== Go 相关 ====================
+# 依赖目录
 vendor/
 
-# 运行数据
-data/*
-!data/.gitkeep
+# 测试覆盖率
+*.test
+*.prof
+coverage.txt
+coverage.html
+coverage.out
 
-# Python 相关
+# Go 工作区文件
+go.work
+go.work.sum
+
+# ==================== eBPF 相关 ====================
+# 生成的 vmlinux.h
+src/bpf/vmlinux.h
+
+# 骨架文件
+*.skel.h
+*.skel.json
+
+# BTF 文件
+*.btf
+
+# ==================== Python 相关 ====================
+# 字节码文件
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
+
+# 虚拟环境
 .Python
 env/
 venv/
 .venv/
+ENV/
+env.bak/
+venv.bak/
+
+# 分发/打包
+dist/
+*.egg-info/
+*.egg
+.eggs/
 pip-log.txt
 pip-delete-this-directory.txt
 
-# eBPF 相关
-src/bpf/vmlinux.h
-*.skel.h
+# PyInstaller
+*.manifest
+*.spec
+
+# ==================== 数据与日志 ====================
+# 运行数据目录
+data/*
+!data/.gitkeep
 
 # 日志文件
 logs/
 *.log
 
-# 临时文件
-*.tmp
-*.swp
-*.swo
-*~
+# 数据库文件
+*.sqlite
+*.sqlite3
+*.db
 
-# IDE 文件
+# ==================== 配置文件 ====================
+# 本地覆盖配置
+config/*.local.yaml
+config/*.local.yml
+config/*.secret.yaml
+config/*.secret.yml
+config/*.override.yaml
+config/*.override.yml
+
+# 环境变量文件
+.env
+.env.*
+!.env.example
+
+# 规则文件备份
+config/*.bak
+config/*.backup
+
+# ==================== 测试相关 ====================
+# 测试报告
+test_reports/
+*.test
+*.prof
+
+# 测试数据（敏感）
+test_data/local/
+test_data/*.secret.json
+
+# ==================== IDE 与编辑器 ====================
+# VSCode
 .vscode/
+*.code-workspace
+
+# JetBrains IDEs
 .idea/
 *.iml
+*.ipr
+*.iws
 
-# 系统文件
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*.swn
+*~
+.*.swp
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# ==================== 操作系统 ====================
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
 Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
 
-# 配置文件（可能包含敏感信息）
-*.env
-config/*.local.yaml
-config/*.secret.yaml
-config/*.override.yaml
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
 
-# 数据库/缓存
-*.sqlite
-*.db
+# ==================== 版本控制 ====================
+# Git
+*.orig
+*.BACKUP.*
+*.BASE.*
+*.LOCAL.*
+*.REMOTE.*
+
+# ==================== 临时文件 ====================
+# 备份文件
+*.bak
+*.backup
+*.old
+
+# 临时文件
+*.tmp
+*.temp
+*.temp.*
+
+# 压缩文件
+*.zip
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.rar
+*.7z
+
+# ==================== 安全相关 ====================
+# 密钥文件
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+
+# 敏感数据
+secrets/
+.secrets/
+credentials/
+.credentials/
+
+# ==================== 其他 ====================
+# Node.js (如果有前端部分)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+
+# Docker
+.docker/
+
+# 文档生成
+docs/_build/
+site/
+
+# 性能分析
+*.pprof
+cpu.prof
+mem.prof
+
+# MonkeyCode 本地配置（如果有）
+.monkeycode/local/
