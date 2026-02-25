@@ -5,7 +5,6 @@ import (
 	"time"
 	"runtime"
 	"log"
-	"strings"
 )
 
 // PerformanceOptimizer 性能优化器
@@ -378,6 +377,7 @@ func (po *PerformanceOptimizer) startStatsResetTimer() {
 }
 
 // GetOptimizedRuleCategories 获取优化的规则类别
+// 返回与配置文件中 detection_rules 一致的类别名称
 func (po *PerformanceOptimizer) GetOptimizedRuleCategories(event *EventJSON) []string {
 	if !po.config.EnableIndexing {
 		return []string{}
@@ -392,53 +392,45 @@ func (po *PerformanceOptimizer) GetOptimizedRuleCategories(event *EventJSON) []s
 		}
 		categories = append(categories, category)
 	}
-	
+
+	// 根据事件类型映射到配置文件中的规则类别
+	// 配置文件类别: file, network, process, privilege, memory
 	switch event.EventType {
-	case "execve", "execveat", "fork", "clone", "process", "process_create":
-		addCategory("reverse_shell")
-		addCategory("privilege_escalation")
-		addCategory("process_injection")
-		addCategory("malware_behavior")
-	case "openat", "open", "write", "read", "unlink", "rename", "chmod", "chown":
-		addCategory("sensitive_file_access")
-		addCategory("filesystem_anomaly")
-		addCategory("malware_behavior")
-	case "connect", "accept", "sendto", "recvfrom":
-		addCategory("reverse_shell")
-		addCategory("network_anomaly")
-		addCategory("malware_behavior")
-	case "setuid", "setgid":
-		addCategory("privilege_escalation")
-		addCategory("filesystem_anomaly")
-	case "ptrace", "mmap", "mprotect", "process_vm_writev", "process_vm_readv":
-		addCategory("process_injection")
-		addCategory("malware_behavior")
+	// 文件系统相关事件 -> file 类别
+	case "openat", "open", "write", "read", "unlink", "rename", "chmod", "chown", "close":
+		addCategory("file")
+
+	// 进程相关事件 -> process 类别
+	case "execve", "execveat", "fork", "clone", "exit":
+		addCategory("process")
+
+	// 网络相关事件 -> network 类别
+	case "connect", "accept", "sendto", "recvfrom", "bind", "listen", "socket", "shutdown":
+		addCategory("network")
+
+	// 权限相关事件 -> permission 类别（配置文件中使用 permission）
+	case "setuid", "setgid", "setreuid", "setregid", "setresuid", "setresgid", "setns", "unshare", "prctl":
+		addCategory("permission")
+
+	// 内存相关事件 -> memory 类别
+	case "mmap", "mprotect", "munmap", "mremap":
+		addCategory("memory")
+
+	// 系统相关事件 -> system 类别
+	case "ptrace", "kill":
+		addCategory("process")
+		addCategory("system")
+
+	case "mount", "umount":
+		addCategory("file")
+		addCategory("system")
+
+	case "init_module", "delete_module":
+		addCategory("system")
+
 	default:
+		// 未知事件类型，返回空切片让所有规则都能被检查
 		return []string{}
-	}
-
-	if event.Comm != "" {
-		comm := strings.ToLower(event.Comm)
-		shellProcesses := []string{"bash", "sh", "zsh", "fish", "csh"}
-		for _, shellProc := range shellProcesses {
-			if strings.Contains(comm, shellProc) {
-				addCategory("reverse_shell")
-				break
-			}
-		}
-
-		networkProcesses := []string{"nc", "netcat", "socat", "telnet", "curl", "wget"}
-		for _, netProc := range networkProcesses {
-			if strings.Contains(comm, netProc) {
-				addCategory("reverse_shell")
-				addCategory("network_anomaly")
-				break
-			}
-		}
-
-		if strings.Contains(comm, "sudo") {
-			addCategory("privilege_escalation")
-		}
 	}
 
 	return categories

@@ -281,6 +281,12 @@ func (e *EnhancedRuleEngine) CompileRules() error {
 }
 
 // 编译单个条件
+// 支持多种条件格式：
+// - 简单值: field: value
+// - 正则表达式: field: "regex:pattern"
+// - 比较操作: field: ">=1000", "<1024", 等
+// - 列表成员: field: "in:[1,2,3]", "notin:[1,2,3]"
+// - 复杂对象: field: {operator: "contains", value: "xxx"}
 func (e *EnhancedRuleEngine) compileCondition(condition map[string]interface{}) (*CompiledCondition, error) {
 	cond := &CompiledCondition{
 		Values: make([]interface{}, 0), // 初始化空的Values数组
@@ -302,6 +308,15 @@ func (e *EnhancedRuleEngine) compileCondition(condition map[string]interface{}) 
 				cond.CompiledRegex = regex
 				// 为正则匹配也保存原始值，以便调试
 				cond.Values = []interface{}{regexPattern}
+			} else if strings.HasPrefix(v, "notin:") || strings.HasPrefix(v, "not_in:") {
+				cond.Operator = OpNotIn
+				listStr := strings.TrimPrefix(v, "notin:")
+				listStr = strings.TrimPrefix(listStr, "not_in:")
+				cond.Values = parseListValue(listStr)
+			} else if strings.HasPrefix(v, "in:") {
+				cond.Operator = OpIn
+				listStr := strings.TrimPrefix(v, "in:")
+				cond.Values = parseListValue(listStr)
 			} else if strings.HasPrefix(v, ">=") {
 				cond.Operator = OpGreaterEqual
 				numStr := strings.TrimPrefix(v, ">=")
@@ -435,6 +450,39 @@ func (e *EnhancedRuleEngine) compileCondition(condition map[string]interface{}) 
 	}
 
 	return cond, nil
+}
+
+// parseListValue 解析列表值字符串
+// 支持格式: [1,2,3] 或 1,2,3
+func parseListValue(listStr string) []interface{} {
+	// 移除方括号
+	listStr = strings.TrimSpace(listStr)
+	listStr = strings.TrimPrefix(listStr, "[")
+	listStr = strings.TrimSuffix(listStr, "]")
+
+	if listStr == "" {
+		return []interface{}{}
+	}
+
+	parts := strings.Split(listStr, ",")
+	result := make([]interface{}, 0, len(parts))
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		// 尝试解析为数字
+		if num, err := strconv.ParseFloat(part, 64); err == nil {
+			result = append(result, num)
+		} else {
+			// 作为字符串处理
+			result = append(result, part)
+		}
+	}
+
+	return result
 }
 
 // 增强的规则匹配
@@ -711,28 +759,110 @@ func matchEventType(eventType string, expected interface{}) bool {
 	return false
 }
 
+// matchEventTypeString 事件类型别名匹配
+// 将配置中的事件类型别名映射到实际的事件类型名称
 func matchEventTypeString(eventType, expected string) bool {
+	// 首先尝试精确匹配
 	if eventType == expected {
 		return true
 	}
-	switch strings.ToLower(strings.TrimSpace(expected)) {
-	case "network_connect":
-		return eventType == "connect"
-	case "file_delete":
-		return eventType == "unlink"
-	case "file_modify":
-		return eventType == "write" || eventType == "chmod" || eventType == "chown" || eventType == "rename"
-	case "file_open":
-		return eventType == "openat"
-	case "process_create":
-		return eventType == "execve" || eventType == "execveat" || eventType == "fork" || eventType == "clone"
-	default:
-		return false
+
+	// 转换为小写进行比较（不区分大小写）
+	eventTypeLower := strings.ToLower(strings.TrimSpace(eventType))
+	expectedLower := strings.ToLower(strings.TrimSpace(expected))
+
+	if eventTypeLower == expectedLower {
+		return true
 	}
+
+	// 事件类型别名映射表
+	aliasMappings := map[string][]string{
+		"file_open":      {"openat"},
+		"file_modify":    {"write", "chmod", "chown", "rename"},
+		"file_delete":    {"unlink"},
+		"file_access":    {"openat", "read", "write"},
+		"process_create": {"execve", "execveat", "fork", "clone"},
+		"process_exit":   {"exit"},
+		"network_connect": {"connect"},
+		"network_bind":   {"bind"},
+		"network_listen": {"listen"},
+		"network_accept": {"accept"},
+		"network_send":   {"sendto"},
+		"network_recv":   {"recvfrom"},
+		"network_socket": {"socket"},
+		"memory_mmap":    {"mmap"},
+		"memory_mprotect": {"mprotect"},
+		"memory_munmap":  {"munmap"},
+		"privilege_setuid": {"setuid"},
+		"privilege_setgid": {"setgid"},
+		"privilege_ptrace": {"ptrace"},
+		"system_mount":   {"mount"},
+		"system_umount":  {"umount"},
+		"system_module":  {"init_module", "delete_module"},
+	}
+
+	// 检查 expected 是否是别名
+	if aliases, ok := aliasMappings[expectedLower]; ok {
+		for _, alias := range aliases {
+			if eventTypeLower == alias || eventType == alias {
+				return true
+			}
+		}
+	}
+
+	// 检查 eventType 是否是别名，expected 是实际类型
+	if aliases, ok := aliasMappings[eventTypeLower]; ok {
+		for _, alias := range aliases {
+			if expectedLower == alias || expected == alias {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // 获取事件字段值
+// 支持嵌套字段访问，如 dst_addr.port、src_addr.ip 等
 func (e *EnhancedRuleEngine) getFieldValue(event *EventJSON, field string) interface{} {
+	// 处理嵌套字段 (如 dst_addr.port)
+	if strings.Contains(field, ".") {
+		parts := strings.SplitN(field, ".", 2)
+		if len(parts) != 2 {
+			return nil
+		}
+		parent := parts[0]
+		child := parts[1]
+
+		switch parent {
+		case "src_addr":
+			if event.SrcAddr == nil {
+				return nil
+			}
+			switch child {
+			case "ip":
+				return event.SrcAddr.IP
+			case "port":
+				return uint32(event.SrcAddr.Port)
+			case "family":
+				return event.SrcAddr.Family
+			}
+		case "dst_addr":
+			if event.DstAddr == nil {
+				return nil
+			}
+			switch child {
+			case "ip":
+				return event.DstAddr.IP
+			case "port":
+				return uint32(event.DstAddr.Port)
+			case "family":
+				return event.DstAddr.Family
+			}
+		}
+		return nil
+	}
+
 	switch field {
 	case "event_type":
 		return event.EventType
@@ -755,11 +885,13 @@ func (e *EnhancedRuleEngine) getFieldValue(event *EventJSON, field string) inter
 	case "cmdline":
 		return event.Cmdline
 	case "mode":
-		return event.Mode
+		// 将 mode 数值转换为标志字符串（如 "O_RDONLY|O_CREAT"）
+		return formatFileMode(event.Mode)
 	case "size":
 		return event.Size
 	case "flags":
-		return event.Flags
+		// 将 flags 数值转换为标志字符串
+		return formatFileFlags(event.Flags)
 	case "ret_code":
 		return event.RetCode
 	case "addr":
@@ -779,44 +911,80 @@ func (e *EnhancedRuleEngine) getFieldValue(event *EventJSON, field string) inter
 			return nil
 		}
 		return event.SrcAddr.IP
-	case "src_addr.ip":
-		if event.SrcAddr == nil {
-			return nil
-		}
-		return event.SrcAddr.IP
-	case "src_addr.port":
-		if event.SrcAddr == nil {
-			return nil
-		}
-		return uint32(event.SrcAddr.Port)
-	case "src_addr.family":
-		if event.SrcAddr == nil {
-			return nil
-		}
-		return event.SrcAddr.Family
 	case "dst_addr":
 		if event.DstAddr == nil {
 			return nil
 		}
 		return event.DstAddr.IP
-	case "dst_addr.ip":
-		if event.DstAddr == nil {
-			return nil
-		}
-		return event.DstAddr.IP
-	case "dst_addr.port":
-		if event.DstAddr == nil {
-			return nil
-		}
-		return uint32(event.DstAddr.Port)
-	case "dst_addr.family":
-		if event.DstAddr == nil {
-			return nil
-		}
-		return event.DstAddr.Family
+	case "old_uid":
+		return event.OldUID
+	case "old_gid":
+		return event.OldGID
+	case "new_uid":
+		return event.NewUID
+	case "new_gid":
+		return event.NewGID
 	default:
 		return nil
 	}
+}
+
+// formatFileMode 将文件 mode 数值转换为标志字符串
+// 用于匹配规则中的正则表达式（如 ".*O_CREAT.*"）
+func formatFileMode(mode uint32) string {
+	if mode == 0 {
+		return ""
+	}
+	var flags []string
+
+	// 文件访问模式 (O_ACCMODE = 0x3)
+	switch mode & 0x3 {
+	case 0:
+		flags = append(flags, "O_RDONLY")
+	case 1:
+		flags = append(flags, "O_WRONLY")
+	case 2:
+		flags = append(flags, "O_RDWR")
+	}
+
+	// 文件创建和状态标志
+	if mode&0x40 != 0 {
+		flags = append(flags, "O_CREAT")
+	}
+	if mode&0x80 != 0 {
+		flags = append(flags, "O_EXCL")
+	}
+	if mode&0x100 != 0 {
+		flags = append(flags, "O_NOCTTY")
+	}
+	if mode&0x200 != 0 {
+		flags = append(flags, "O_TRUNC")
+	}
+	if mode&0x400 != 0 {
+		flags = append(flags, "O_APPEND")
+	}
+	if mode&0x800 != 0 {
+		flags = append(flags, "O_NONBLOCK")
+	}
+	if mode&0x4000 != 0 {
+		flags = append(flags, "O_DIRECTORY")
+	}
+	if mode&0x20000 != 0 {
+		flags = append(flags, "O_NOFOLLOW")
+	}
+	if mode&0x100000 != 0 {
+		flags = append(flags, "O_CLOEXEC")
+	}
+
+	return strings.Join(flags, "|")
+}
+
+// formatFileFlags 将文件 flags 数值转换为标志字符串
+func formatFileFlags(flags uint32) string {
+	if flags == 0 {
+		return ""
+	}
+	return formatFileMode(flags) // 使用相同的转换逻辑
 }
 
 // 比较值

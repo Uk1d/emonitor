@@ -176,7 +176,7 @@
                 <div id="resolved-alerts" class="value">0</div>
             </div>
             <div class="stat-card">
-                <div class="label">事件速率/秒</div>
+                <div class="label">事件总数</div>
                 <div id="events-rate" class="value">0</div>
             </div>
         </div>
@@ -380,11 +380,21 @@
                     break;
                 case 'event':
                     buffer.events.push(msg.data);
-                    state.eventCount++;
+                    // 使用后端发送的总事件数（total_all），而不是本地计数
+                    // 这样刷新页面后能立即显示正确的总数
+                    if (msg.total_all !== undefined) {
+                        state.eventCount = msg.total_all;
+                    } else {
+                        state.eventCount++;
+                    }
                     state.lastEventTime = Date.now();
                     break;
                 case 'events_snapshot':
                     state.events = msg.data || [];
+                    // 使用后端发送的总事件数初始化
+                    if (msg.total_all !== undefined) {
+                        state.eventCount = msg.total_all;
+                    }
                     renderEvents();
                     break;
             }
@@ -416,17 +426,10 @@
             els.resolvedAlerts.textContent = state.stats.resolved || 0;
         }
 
-        // 更新事件速率显示
+        // 更新事件计数显示
         function updateEPS() {
-            const now = Date.now();
-            const elapsed = (now - state.lastEventTime) / 1000;
-            if (elapsed > EPS_WINDOW / 1000) {
-                els.eventsRate.textContent = '0';
-                state.eventCount = 0;
-            } else {
-                const eps = Math.round(state.eventCount / (elapsed || 1));
-                els.eventsRate.textContent = eps;
-            }
+            // 显示事件总数而不是速率
+            els.eventsRate.textContent = state.eventCount || state.stats.total || 0;
         }
 
         // 严重级别中文映射
