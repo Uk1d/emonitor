@@ -28,64 +28,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// 事件类型定义 - 与eBPF程序保持一致
-type EventType uint32
-
-const (
-	// 进程相关事件
-	EventExecve   EventType = 1
-	EventFork     EventType = 2
-	EventClone    EventType = 3
-	EventExit     EventType = 4
-	EventExecveat EventType = 5
-
-	// 文件系统相关事件
-	EventOpenat EventType = 10
-	EventClose  EventType = 11
-	EventRead   EventType = 12
-	EventWrite  EventType = 13
-	EventUnlink EventType = 14
-	EventRename EventType = 15
-	EventChmod  EventType = 16
-	EventChown  EventType = 17
-
-	// 网络相关事件
-	EventConnect  EventType = 20
-	EventBind     EventType = 21
-	EventListen   EventType = 22
-	EventAccept   EventType = 23
-	EventSendto   EventType = 24
-	EventRecvfrom EventType = 25
-	EventSocket   EventType = 26
-	EventShutdown EventType = 27
-
-	// 权限相关事件
-	EventSetuid    EventType = 30
-	EventSetgid    EventType = 31
-	EventSetreuid  EventType = 32
-	EventSetregid  EventType = 33
-	EventSetresuid EventType = 34
-	EventSetresgid EventType = 35
-	EventSetns     EventType = 36
-	EventUnshare   EventType = 37
-	EventPrctl     EventType = 38
-
-	// 内存相关事件
-	EventMmap     EventType = 40
-	EventMprotect EventType = 41
-	EventMunmap   EventType = 42
-	EventMremap   EventType = 43
-
-	// 模块相关事件
-	EventInitModule   EventType = 50
-	EventDeleteModule EventType = 51
-
-	// 系统调用相关
-	EventPtrace EventType = 60
-	EventKill   EventType = 61
-	EventMount  EventType = 62
-	EventUmount EventType = 63
-)
+// 事件类型定义已移动到 event_types.go
 
 // 网络地址结构 - 对应eBPF中的network_addr
 type NetworkAddr struct {
