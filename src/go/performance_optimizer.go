@@ -378,8 +378,15 @@ func (po *PerformanceOptimizer) startStatsResetTimer() {
 
 // GetOptimizedRuleCategories 获取优化的规则类别
 // 返回与配置文件中 detection_rules 一致的类别名称
+// 配置文件类别: file, network, process, permission, memory, system
 func (po *PerformanceOptimizer) GetOptimizedRuleCategories(event *EventJSON) []string {
+	// 禁用索引优化时返回空切片，表示检查所有类别
 	if !po.config.EnableIndexing {
+		return []string{}
+	}
+
+	// 空事件或未知事件类型，返回空切片让所有规则都能被检查
+	if event == nil || event.EventType == "" || event.EventType == "unknown" {
 		return []string{}
 	}
 
@@ -394,7 +401,6 @@ func (po *PerformanceOptimizer) GetOptimizedRuleCategories(event *EventJSON) []s
 	}
 
 	// 根据事件类型映射到配置文件中的规则类别
-	// 配置文件类别: file, network, process, privilege, memory
 	switch event.EventType {
 	// 文件系统相关事件 -> file 类别
 	case "openat", "open", "write", "read", "unlink", "rename", "chmod", "chown", "close":
@@ -405,7 +411,7 @@ func (po *PerformanceOptimizer) GetOptimizedRuleCategories(event *EventJSON) []s
 		addCategory("process")
 
 	// 网络相关事件 -> network 类别
-	case "connect", "accept", "sendto", "recvfrom", "bind", "listen", "socket", "shutdown":
+	case "connect", "accept", "accept4", "sendto", "recvfrom", "bind", "listen", "socket", "shutdown":
 		addCategory("network")
 
 	// 权限相关事件 -> permission 类别（配置文件中使用 permission）
@@ -416,7 +422,7 @@ func (po *PerformanceOptimizer) GetOptimizedRuleCategories(event *EventJSON) []s
 	case "mmap", "mprotect", "munmap", "mremap":
 		addCategory("memory")
 
-	// 系统相关事件 -> system 类别
+	// 系统相关事件 -> system 类别（ptrace和kill也属于process类别）
 	case "ptrace", "kill":
 		addCategory("process")
 		addCategory("system")
@@ -430,6 +436,7 @@ func (po *PerformanceOptimizer) GetOptimizedRuleCategories(event *EventJSON) []s
 
 	default:
 		// 未知事件类型，返回空切片让所有规则都能被检查
+		// 这确保了新增的事件类型不会导致规则被跳过
 		return []string{}
 	}
 
