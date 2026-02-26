@@ -314,7 +314,7 @@ func (c *WebhookNotificationChannel) SendNotification(alert *ManagedAlert) error
     }
 
     if c.URL == "" {
-        return fmt.Errorf("Webhook URL 未配置")
+        return fmt.Errorf("webhook URL 未配置")
     }
 
     method := c.Method
@@ -370,7 +370,7 @@ func (c *WebhookNotificationChannel) SendNotification(alert *ManagedAlert) error
             time.Sleep(time.Duration(i) * 500 * time.Millisecond)
         }
     }
-    return fmt.Errorf("Webhook 发送失败: %v", lastErr)
+    return fmt.Errorf("webhook 发送失败: %v", lastErr)
 }
 
 func (c *WebhookNotificationChannel) GetChannelName() string {
