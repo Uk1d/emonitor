@@ -184,7 +184,7 @@ func (d *Dashboard) GetStats() DashboardStats {
 }
 
 // GetAggregatedStats 获取详细聚合统计
-func (d *Dashboard) GetAggregatedStats() AggregatedStats {
+func (d *Dashboard) GetAggregatedStats() AggregatedStatsData {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.aggregator.GetStats()
@@ -208,10 +208,8 @@ func (d *Dashboard) Start() {
 			break
 		}
 
-		select {
-		case <-ticker.C:
-			d.display()
-		}
+		<-ticker.C
+		d.display()
 	}
 }
 
@@ -291,7 +289,7 @@ func (d *Dashboard) display() {
 }
 
 // generateLeftColumn 生成左列内容
-func (d *Dashboard) generateLeftColumn(stats DashboardStats, aggStats AggregatedStats) []string {
+func (d *Dashboard) generateLeftColumn(stats DashboardStats, aggStats AggregatedStatsData) []string {
 	var lines []string
 
 	// Top进程
@@ -345,7 +343,7 @@ func (d *Dashboard) generateLeftColumn(stats DashboardStats, aggStats Aggregated
 }
 
 // generateRightColumn 生成右列内容
-func (d *Dashboard) generateRightColumn(stats DashboardStats, aggStats AggregatedStats) []string {
+func (d *Dashboard) generateRightColumn(stats DashboardStats, aggStats AggregatedStatsData) []string {
 	var lines []string
 
 	// Top系统调用

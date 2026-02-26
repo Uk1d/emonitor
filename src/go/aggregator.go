@@ -7,9 +7,28 @@ import (
 	"time"
 )
 
-// AggregatedStats 聚合统计数据结构
+// AggregatedStats 聚合统计数据结构（内部使用，包含锁）
 type AggregatedStats struct {
 	mu                sync.RWMutex
+	StartTime         time.Time
+	TotalEvents       uint64
+	EventsByType      map[string]uint64
+	EventsByUID       map[uint32]uint64
+	EventsByPID       map[uint32]uint64
+	EventsByComm      map[string]uint64
+	EventsBySeverity  map[string]uint64
+	EventsByHour      map[int]uint64
+	TopProcesses      []ProcessAggregation
+	TopSyscalls       []SyscallAggregation
+	TopUsers          []UserAggregation
+	SecurityAlerts    []SecurityAlert
+	NetworkConnections []NetworkConnection
+	FileOperations    []FileOperationAggregation
+	LastUpdate        time.Time
+}
+
+// AggregatedStatsData 聚合统计数据快照（用于外部传递，不包含锁）
+type AggregatedStatsData struct {
 	StartTime         time.Time
 	TotalEvents       uint64
 	EventsByType      map[string]uint64
@@ -382,12 +401,13 @@ func (as *AggregatedStats) recordFileOperation(event *EventJSON, now time.Time) 
 }
 
 // GetStats 获取聚合统计数据（只读）
-func (as *AggregatedStats) GetStats() AggregatedStats {
+// 返回不包含锁的数据快照，避免锁值拷贝问题
+func (as *AggregatedStats) GetStats() AggregatedStatsData {
 	as.mu.RLock()
 	defer as.mu.RUnlock()
 
 	// 创建副本以避免并发访问问题
-	stats := AggregatedStats{
+	stats := AggregatedStatsData{
 		StartTime:        as.StartTime,
 		TotalEvents:      as.TotalEvents,
 		EventsByType:     make(map[string]uint64),
