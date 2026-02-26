@@ -61,6 +61,12 @@ func Handler() http.Handler {
 		// 移除前导斜杠，便于后续处理
 		p = strings.TrimPrefix(p, "/")
 
+		// 处理登录页面
+		if p == "login" || p == "login/" {
+			serveFile(w, "login.html")
+			return
+		}
+
 		// 处理空路径和根路径
 		if p == "" || p == "/" {
 			p = "index.html"
@@ -78,30 +84,42 @@ func Handler() http.Handler {
 			p = "index.html"
 		}
 
-		// 清理路径，防止目录遍历攻击
-		// path.Clean 会处理 ".." 等危险路径组件
-		f := path.Clean(p)
+		serveFile(w, p)
+	})
+}
 
-		// 尝试读取请求的文件
-		b, err := fs.ReadFile(rooted, f)
-		if err != nil {
-			// 文件不存在时，回退到 index.html
-			// 这是单页应用的标准做法，确保前端路由可以正常工作
-			f = "index.html"
-			b, _ = fs.ReadFile(rooted, f)
-		}
+// serveFile 提供静态文件服务
+func serveFile(w http.ResponseWriter, filename string) {
+	// 清理路径，防止目录遍历攻击
+	// path.Clean 会处理 ".." 等危险路径组件
+	f := path.Clean(filename)
 
-		// 设置正确的 Content-Type 响应头
-		// 根据文件扩展名自动推断 MIME 类型
-		if ct := mime.TypeByExtension(path.Ext(f)); ct != "" {
-			w.Header().Set("Content-Type", ct)
-		} else {
-			// 无法推断时，默认使用 HTML 类型
-			// 并显式指定 UTF-8 编码，确保中文正确显示
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		}
+	// 尝试读取请求的文件
+	b, err := fs.ReadFile(rooted, f)
+	if err != nil {
+		// 文件不存在时，回退到 index.html
+		// 这是单页应用的标准做法，确保前端路由可以正常工作
+		f = "index.html"
+		b, _ = fs.ReadFile(rooted, f)
+	}
 
-		// 写入响应内容
-		w.Write(b)
+	// 设置正确的 Content-Type 响应头
+	// 根据文件扩展名自动推断 MIME 类型
+	if ct := mime.TypeByExtension(path.Ext(f)); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	} else {
+		// 无法推断时，默认使用 HTML 类型
+		// 并显式指定 UTF-8 编码，确保中文正确显示
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	}
+
+	// 写入响应内容
+	w.Write(b)
+}
+
+// LoginHandler 返回登录页面的处理函数
+func LoginHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serveFile(w, "login.html")
 	})
 }

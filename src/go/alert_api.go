@@ -15,6 +15,7 @@ import (
 
 	httpapi "etracee/internal/api/http"
 	"etracee/internal/api/middleware"
+	"etracee/internal/auth"
 	"etracee/internal/common/config"
 	"etracee/internal/web"
 
@@ -27,6 +28,7 @@ type AlertAPI struct {
 	server       *http.Server
 	storage      Storage
 	eventContext *EventContext
+	authService  *auth.AuthService
 
 	// WebSocket
 	wsUpgrader       websocket.Upgrader
@@ -56,7 +58,16 @@ func NewAlertAPI(alertManager *AlertManager, port int, storage Storage, eventCon
 
 	mux := http.NewServeMux()
 
+	// 注册认证相关路由（无需认证）
+	mux.HandleFunc("/api/login", api.handleLogin)
+	mux.HandleFunc("/api/logout", api.handleLogout)
+	mux.HandleFunc("/api/check-auth", api.handleCheckAuth)
+	mux.Handle("/login", web.LoginHandler())
+
+	// 注册需要认证的API路由
 	httpapi.Register(mux, api)
+
+	// 静态资源（需要认证）
 	mux.Handle("/", web.Handler())
 
 	api.allowedOrigins = config.AllowedOriginsFromEnv()
@@ -89,7 +100,14 @@ func NewAlertAPI(alertManager *AlertManager, port int, storage Storage, eventCon
 			addr = fmt.Sprintf("%s:%d", api.bindAddr, port)
 		}
 	}
-	base := mw.Wrap(mux)
+
+	// 应用认证中间件
+	var handler http.Handler = mux
+	if api.authService != nil {
+		handler = api.authService.Middleware(mux)
+	}
+
+	base := mw.Wrap(handler)
 	normalizer := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		for strings.Contains(p, "//") {
@@ -106,6 +124,43 @@ func NewAlertAPI(alertManager *AlertManager, port int, storage Storage, eventCon
 	api.server = &http.Server{Addr: addr, Handler: normalizer}
 
 	return api
+}
+
+// SetAuthService 设置认证服务
+func (api *AlertAPI) SetAuthService(authService *auth.AuthService) {
+	api.authService = authService
+}
+
+// handleLogin 处理登录请求
+func (api *AlertAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if api.authService == nil {
+		http.Error(w, `{"success": false, "message": "认证服务未启用"}`, http.StatusServiceUnavailable)
+		return
+	}
+	api.authService.HandleLogin(w, r)
+}
+
+// handleLogout 处理登出请求
+func (api *AlertAPI) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if api.authService == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"success": true})
+		return
+	}
+	api.authService.HandleLogout(w, r)
+}
+
+// handleCheckAuth 检查认证状态
+func (api *AlertAPI) handleCheckAuth(w http.ResponseWriter, r *http.Request) {
+	if api.authService == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"authenticated": true,
+			"message":       "认证服务未启用",
+		})
+		return
+	}
+	api.authService.HandleCheckAuth(w, r)
 }
 
 // WSClient 表示一个带发送队列的 WebSocket 客户端（用于反压）
@@ -729,7 +784,6 @@ func (api *AlertAPI) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}))
 	}
 
-	return
 }
 
 // mustJSON 辅助：序列化为 JSON 文本；失败返回空字节切片

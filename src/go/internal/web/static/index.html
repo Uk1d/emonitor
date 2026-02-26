@@ -155,7 +155,9 @@
         <div class="controls">
             <div class="live-indicator"><div class="live-dot"></div><span>实时</span></div>
             <div class="status"><div id="ws-dot" class="dot"></div><span id="ws-text">连接中</span></div>
+            <span id="user-info" style="margin-left:12px;color:var(--muted);font-size:13px;"></span>
             <button id="theme-toggle" class="btn">主题切换</button>
+            <button id="logout-btn" class="btn" onclick="logout()">退出</button>
         </div>
     </div>
 
@@ -257,6 +259,40 @@
 
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <script>
+    // 认证相关函数
+    function getAuthToken() {
+        return localStorage.getItem('auth_token');
+    }
+
+    function checkAuth() {
+        const token = getAuthToken();
+        if (!token) {
+            window.location.href = '/login';
+            return false;
+        }
+        return true;
+    }
+
+    async function logout() {
+        const token = getAuthToken();
+        if (token) {
+            try {
+                await fetch('/api/logout', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+            } catch(e) {}
+        }
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('auth_expires');
+        window.location.href = '/login';
+    }
+
+    // 页面加载前检查认证
+    if (!checkAuth()) {
+        throw new Error('未认证');
+    }
+
     (function() {
         // 配置常量
         const MAX_ALERTS = 100;        // 最大告警数量
@@ -291,20 +327,47 @@
             toastContainer: document.getElementById('toast-container'),
             detailModal: document.getElementById('detail-modal'),
             detailTitle: document.getElementById('detail-title'),
-            detailBody: document.getElementById('detail-body')
+            detailBody: document.getElementById('detail-body'),
+            userInfo: document.getElementById('user-info')
         };
 
         // 数据缓冲区
         let buffer = { alerts: [], events: [], stats: null };
+
+        // 获取认证头
+        function authHeaders() {
+            const token = getAuthToken();
+            return token ? { 'Authorization': 'Bearer ' + token } : {};
+        }
 
         // 初始化函数
         function init() {
             setupTheme();
             setupTabs();
             setupFilters();
+            checkAuthStatus();
             connect();
             setInterval(flushBuffer, FLUSH_INTERVAL);
             setInterval(updateEPS, 1000);
+        }
+
+        // 检查认证状态并显示用户信息
+        async function checkAuthStatus() {
+            try {
+                const resp = await fetch('/api/check-auth', {
+                    headers: authHeaders()
+                });
+                const data = await resp.json();
+                if (!data.authenticated) {
+                    window.location.href = '/login';
+                    return;
+                }
+                if (els.userInfo && data.username) {
+                    els.userInfo.textContent = data.username;
+                }
+            } catch(e) {
+                console.error('检查认证状态失败:', e);
+            }
         }
 
         // 设置主题切换

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"etracee/internal/auth"
 	"etracee/internal/common/config"
 	"flag"
 	"fmt"
@@ -619,8 +620,20 @@ func main() {
 		log.Printf("[*] Webhook 通知未配置，跳过注册（设置 ETRACEE_WEBHOOK_URL 启用）")
 	}
 
+	// 初始化认证服务
+	authCfg := auth.GetAuthFromEnv()
+	authService, authErr := auth.InitAuth(authCfg)
+	if authErr != nil {
+		log.Printf("[!] 认证服务初始化失败: %v (将禁用登录功能)", authErr)
+	} else {
+		log.Println("[+] 认证服务初始化成功")
+	}
+
 	// 初始化告警管理API服务器（接入存储查询）
 	alertAPI := NewAlertAPI(alertManager, 8888, storage, eventContext)
+	if authService != nil {
+		alertAPI.SetAuthService(authService)
+	}
 	go func() {
 		log.Println("[+] 告警管理API服务器启动在端口 8888")
 		log.Println("  Web界面: http://localhost:8888")

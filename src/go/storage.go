@@ -1,46 +1,51 @@
 package main
 
 import (
-    "fmt"
+	"fmt"
+	"log"
+	"strconv"
 )
 
 // Storage 抽象：支持告警与事件的写入与查询
 type Storage interface {
-    Init() error
-    Close() error
-    SaveAlert(alert *ManagedAlert) error
-    QueryAlerts(filters map[string]interface{}, page, pageSize int) ([]*ManagedAlert, int, error)
-    SaveEvent(event *EventJSON) error
-    QueryEvents(filters map[string]interface{}, page, pageSize int) ([]*EventJSON, int, error)
-}
-
-// StorageConfig 存储配置
-type StorageConfig struct {
-    Backend string `yaml:"backend"`
-    SQLite  struct {
-        Path        string `yaml:"path"`
-        JournalMode string `yaml:"journal_mode"`
-        Synchronous string `yaml:"synchronous"`
-    } `yaml:"sqlite"`
+	Init() error
+	Close() error
+	SaveAlert(alert *ManagedAlert) error
+	QueryAlerts(filters map[string]interface{}, page, pageSize int) ([]*ManagedAlert, int, error)
+	SaveEvent(event *EventJSON) error
+	QueryEvents(filters map[string]interface{}, page, pageSize int) ([]*EventJSON, int, error)
 }
 
 // NewStorageFromConfig 根据配置创建存储实例并初始化
 func NewStorageFromConfig(cfg *StorageConfig) (Storage, error) {
-    if cfg == nil {
-        return nil, fmt.Errorf("nil storage config")
-    }
-    switch cfg.Backend {
-    case "sqlite":
-        st := &SQLiteStorage{
-            Path:        cfg.SQLite.Path,
-            JournalMode: cfg.SQLite.JournalMode,
-            Synchronous: cfg.SQLite.Synchronous,
-        }
-        if err := st.Init(); err != nil {
-            return nil, err
-        }
-        return st, nil
-    default:
-        return nil, fmt.Errorf("unsupported storage backend: %s", cfg.Backend)
-    }
+	if cfg == nil {
+		return nil, fmt.Errorf("nil storage config")
+	}
+
+	// 目前只支持 MySQL
+	if cfg.Backend != "mysql" && cfg.Backend != "" {
+		return nil, fmt.Errorf("unsupported storage backend: %s (仅支持 mysql)", cfg.Backend)
+	}
+
+	storage := NewMySQLStorage(&cfg.MySQL)
+	if err := storage.Init(); err != nil {
+		return nil, err
+	}
+	log.Printf("[+] 使用 MySQL 存储: %s@%s:%d/%s", cfg.MySQL.User, cfg.MySQL.Host, cfg.MySQL.Port, cfg.MySQL.Database)
+	return storage, nil
+}
+
+// getEnvInt 从环境变量获取整数值
+func getEnvInt(key string, defaultValue int) int {
+	if value := getEnvStr(key); value != "" {
+		if intVal, err := strconv.Atoi(value); err == nil {
+			return intVal
+		}
+	}
+	return defaultValue
+}
+
+// getEnvStr 从环境变量获取字符串值
+func getEnvStr(key string) string {
+	return getEnvOrDefault(key, "")
 }
