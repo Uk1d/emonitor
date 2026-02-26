@@ -168,24 +168,24 @@ func (rtf *RuleTestFramework) createDefaultTestSuites() error {
 		TestCases: []*TestCase{
 			{
 				ID:          "proc_001",
-				Name:        "可疑进程执行",
-				Description: "检测可疑进程执行",
+				Name:        "SUID二进制文件执行",
+				Description: "检测SUID二进制文件的执行",
 				Event: &EventJSON{
 					EventType: "execve",
 					PID:       1234,
 					PPID:      1,
-					UID:       0,
-					Comm:      "nc",
-					Filename:  "/bin/nc",
+					UID:       1000,
+					Comm:      "passwd",
+					Filename:  "/usr/bin/passwd",
 				},
 				Expected: TestExpected{
 					ShouldTrigger: true,
-					RuleNames:     []string{"suspicious_process"},
-					Severity:      "high",
+					RuleNames:     []string{"SUID binary execution"},
+					Severity:      "medium",
 					AlertCount:    1,
 				},
 				Category: "process",
-				Severity: "high",
+				Severity: "medium",
 			},
 			{
 				ID:          "proc_002",
@@ -217,8 +217,8 @@ func (rtf *RuleTestFramework) createDefaultTestSuites() error {
 		TestCases: []*TestCase{
 			{
 				ID:          "net_001",
-				Name:        "可疑外连",
-				Description: "检测可疑的外部连接",
+				Name:        "可疑出站连接",
+				Description: "检测连接到恶意端口的行为",
 				Event: &EventJSON{
 					EventType: "connect",
 					PID:       1236,
@@ -231,12 +231,12 @@ func (rtf *RuleTestFramework) createDefaultTestSuites() error {
 				},
 				Expected: TestExpected{
 					ShouldTrigger: true,
-					RuleNames:     []string{"suspicious_network"},
-					Severity:      "critical",
+					RuleNames:     []string{"Suspicious outbound connection"},
+					Severity:      "medium",
 					AlertCount:    1,
 				},
 				Category: "network",
-				Severity: "critical",
+				Severity: "medium",
 			},
 		},
 	}
@@ -248,8 +248,8 @@ func (rtf *RuleTestFramework) createDefaultTestSuites() error {
 		TestCases: []*TestCase{
 			{
 				ID:          "file_001",
-				Name:        "敏感文件访问",
-				Description: "检测对敏感文件的访问",
+				Name:        "非特权用户读取敏感文件",
+				Description: "检测非特权用户读取敏感文件的行为",
 				Event: &EventJSON{
 					EventType: "openat",
 					PID:       1237,
@@ -259,7 +259,7 @@ func (rtf *RuleTestFramework) createDefaultTestSuites() error {
 				},
 				Expected: TestExpected{
 					ShouldTrigger: true,
-					RuleNames:     []string{"sensitive_file_access"},
+					RuleNames:     []string{"Read sensitive file untrusted"},
 					Severity:      "medium",
 					AlertCount:    1,
 				},
