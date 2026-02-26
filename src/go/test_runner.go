@@ -72,6 +72,11 @@ func (tr *TestRunner) Initialize() error {
 		tr.loadDefaultRules()
 	}
 
+	// 编译规则（关键步骤，确保规则能够被正确匹配）
+	if err := tr.ruleEngine.CompileRules(); err != nil {
+		log.Printf("警告: 规则编译失败: %v", err)
+	}
+
 	// 创建测试框架
 	tr.framework = NewRuleTestFramework(tr.ruleEngine)
 	tr.framework.config.TestDataPath = tr.testDataPath
