@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"log"
 	"regexp"
 	"strings"
 )
@@ -241,6 +242,18 @@ func BuildConditionTree(conditions []ConditionExpr, op LogicOperator) ConditionE
 	if len(conditions) == 0 {
 		return nil
 	}
+
+	// 编译所有需要预编译的条件表达式（如正则表达式）
+	for _, cond := range conditions {
+		if cmpExpr, ok := cond.(*ComparisonExpr); ok {
+			if err := cmpExpr.Compile(); err != nil {
+				log.Printf("条件表达式编译失败: %v", err)
+			}
+		}
+		// 递归处理嵌套的表达式
+		compileNestedExpr(cond)
+	}
+
 	if len(conditions) == 1 {
 		return conditions[0]
 	}
@@ -255,6 +268,29 @@ func BuildConditionTree(conditions []ConditionExpr, op LogicOperator) ConditionE
 		}
 	}
 	return result
+}
+
+// compileNestedExpr 递归编译嵌套的条件表达式
+func compileNestedExpr(expr ConditionExpr) {
+	switch e := expr.(type) {
+	case *BinaryExpr:
+		if cmpExpr, ok := e.Left.(*ComparisonExpr); ok {
+			cmpExpr.Compile()
+		} else {
+			compileNestedExpr(e.Left)
+		}
+		if cmpExpr, ok := e.Right.(*ComparisonExpr); ok {
+			cmpExpr.Compile()
+		} else {
+			compileNestedExpr(e.Right)
+		}
+	case *UnaryExpr:
+		if cmpExpr, ok := e.Expr.(*ComparisonExpr); ok {
+			cmpExpr.Compile()
+		} else {
+			compileNestedExpr(e.Expr)
+		}
+	}
 }
 
 // getFieldValue 从事件中获取字段值
