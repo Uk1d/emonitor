@@ -298,7 +298,7 @@ func (e *EnhancedRuleEngine) compileCondition(condition map[string]interface{}) 
 		switch v := value.(type) {
 		case string:
 			// 解析操作符和值
-			if strings.Contains(v, "regex:") {
+			if strings.HasPrefix(v, "regex:") {
 				cond.Operator = OpRegexMatch
 				regexPattern := strings.TrimPrefix(v, "regex:")
 				regex, err := regexp.Compile(regexPattern)
@@ -308,6 +308,16 @@ func (e *EnhancedRuleEngine) compileCondition(condition map[string]interface{}) 
 				cond.CompiledRegex = regex
 				// 为正则匹配也保存原始值，以便调试
 				cond.Values = []interface{}{regexPattern}
+			} else if strings.HasPrefix(v, "notregex:") || strings.HasPrefix(v, "not_regex:") {
+				cond.Operator = OpNotRegex
+				listStr := strings.TrimPrefix(v, "notregex:")
+				listStr = strings.TrimPrefix(listStr, "not_regex:")
+				regex, err := regexp.Compile(listStr)
+				if err != nil {
+					return nil, fmt.Errorf("无效的正则表达式: %s", listStr)
+				}
+				cond.CompiledRegex = regex
+				cond.Values = []interface{}{listStr}
 			} else if strings.HasPrefix(v, "notin:") || strings.HasPrefix(v, "not_in:") {
 				cond.Operator = OpNotIn
 				listStr := strings.TrimPrefix(v, "notin:")
@@ -634,6 +644,12 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 		if len(cond.Values) == 0 {
 			return false
 		}
+		// 对于 event_type 字段，使用别名匹配
+		if cond.Field == "event_type" {
+			if eventType, ok := fieldValue.(string); ok {
+				return !matchEventType(eventType, cond.Values[0])
+			}
+		}
 		return !e.compareValues(fieldValue, cond.Values[0], OpEquals)
 
 	case OpContains:
@@ -681,15 +697,6 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 					return *num >= cond.NumericValue
 				case OpLessEqual:
 					return *num <= cond.NumericValue
-				}
-			}
-		}
-		if cond.Field == "uid" {
-			if uid, ok := fieldValue.(uint32); ok && uid == 0 {
-				if cond.Operator == OpGreaterEqual || cond.Operator == OpGreaterThan {
-					if cond.NumericValue >= 1000 {
-						return true
-					}
 				}
 			}
 		}
