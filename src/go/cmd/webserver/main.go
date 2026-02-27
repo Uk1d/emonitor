@@ -19,6 +19,7 @@ import (
 	"etracee/internal/api/middleware"
 	"etracee/internal/auth"
 	"etracee/internal/common/config"
+	"etracee/internal/dbconfig"
 	"etracee/internal/web"
 
 	"github.com/gorilla/websocket"
@@ -532,22 +533,35 @@ func main() {
 	log.Printf("    端口: %d", port)
 	log.Printf("    监控程序地址: %s", monitorURL)
 
-	// 初始化认证服务
-	authCfg := auth.GetAuthFromEnv()
+	// 加载配置文件
+	appCfg, err := dbconfig.LoadAppConfig()
+	if err != nil {
+		log.Fatalf("[!] 加载配置文件失败: %v", err)
+	}
+
+	// 初始化认证服务（使用 Web 数据库）
+	webDB := appCfg.GetWebDBConfig()
+	authCfg := &auth.Config{
+		MySQLHost:     webDB.Host,
+		MySQLPort:     webDB.Port,
+		MySQLUser:     webDB.User,
+		MySQLPassword: webDB.Password,
+		MySQLDatabase: webDB.Database,
+		AdminUsername: appCfg.Admin.Username,
+		AdminPassword: appCfg.Admin.Password,
+		JWTSecret:     appCfg.JWT.Secret,
+		TokenExpiry:   time.Duration(appCfg.JWT.ExpiryHours) * time.Hour,
+	}
+
 	log.Printf("[*] 认证服务配置: MySQL %s@%s:%d/%s",
 		authCfg.MySQLUser, authCfg.MySQLHost, authCfg.MySQLPort, authCfg.MySQLDatabase)
 
 	authService, authErr := auth.InitAuth(authCfg)
 	if authErr != nil {
-		log.Printf("[!] 认证服务初始化失败: %v", authErr)
-		log.Printf("[!] 登录功能将不可用，请检查 MySQL 连接配置")
-		log.Printf("[!] 需要设置以下环境变量:")
-		log.Printf("    MYSQL_WEB_HOST, MYSQL_WEB_USER, MYSQL_WEB_PASSWORD, MYSQL_WEB_DATABASE")
-		log.Printf("    或使用通用变量: MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD")
-	} else {
-		log.Println("[+] 认证服务初始化成功")
-		log.Printf("[+] 默认管理员账户: %s (请及时修改密码)", authCfg.AdminUsername)
+		log.Fatalf("[!] 认证服务初始化失败: %v", authErr)
 	}
+	log.Println("[+] 认证服务初始化成功")
+	log.Printf("[+] 管理员账户: %s (请及时修改密码)", authCfg.AdminUsername)
 
 	// 创建 Web 服务
 	srv := NewWebServer(port, monitorURL)

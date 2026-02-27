@@ -517,62 +517,19 @@ func (api *AlertAPI) handleAlertStats(w http.ResponseWriter, r *http.Request) {
 			log.Printf("统计总告警失败: %v", err)
 		}
 
-		// 分布与平均解决时间（SQLite下）
-		if sqlite, ok := api.storage.(*SQLiteStorage); ok && sqlite.DB != nil {
-			// 严重级别分布
-			rows, err := sqlite.DB.Query("SELECT severity, COUNT(1) FROM alerts WHERE created_at >= ? GROUP BY severity", sinceStr)
+		// 分布与平均解决时间（MySQL下）
+		if mysql, ok := api.storage.(*MySQLStorage); ok && mysql.DB != nil {
+			active, resolved, falsePositives, total, severityDist, categoryDist, avgResolution, err := mysql.GetAlertStats(api.startTime)
 			if err == nil {
-				defer rows.Close()
-				stats.SeverityDistribution = map[string]uint64{}
-				for rows.Next() {
-					var sev string
-					var cnt int
-					if err := rows.Scan(&sev, &cnt); err == nil {
-						stats.SeverityDistribution[sev] = uint64(cnt)
-					}
-				}
+				stats.ActiveAlerts = active
+				stats.ResolvedAlerts = resolved
+				stats.FalsePositives = falsePositives
+				stats.TotalAlerts = total
+				stats.SeverityDistribution = severityDist
+				stats.CategoryDistribution = categoryDist
+				stats.AverageResolutionTime = avgResolution
 			} else {
-				log.Printf("统计严重级别分布失败: %v", err)
-			}
-
-			// 类别分布
-			rows2, err := sqlite.DB.Query("SELECT category, COUNT(1) FROM alerts WHERE created_at >= ? GROUP BY category", sinceStr)
-			if err == nil {
-				defer rows2.Close()
-				stats.CategoryDistribution = map[string]uint64{}
-				for rows2.Next() {
-					var cat string
-					var cnt int
-					if err := rows2.Scan(&cat, &cnt); err == nil {
-						stats.CategoryDistribution[cat] = uint64(cnt)
-					}
-				}
-			} else {
-				log.Printf("统计类别分布失败: %v", err)
-			}
-
-			// 平均解决时间（updated_at - created_at 近似）
-			rows3, err := sqlite.DB.Query("SELECT created_at, updated_at FROM alerts WHERE status = ? AND created_at >= ?", string(AlertStatusResolved), sinceStr)
-			if err == nil {
-				defer rows3.Close()
-				var totalDur time.Duration
-				var count int
-				for rows3.Next() {
-					var createdStr, updatedStr string
-					if err := rows3.Scan(&createdStr, &updatedStr); err == nil {
-						created, err1 := time.Parse(time.RFC3339, createdStr)
-						updated, err2 := time.Parse(time.RFC3339, updatedStr)
-						if err1 == nil && err2 == nil && updated.After(created) {
-							totalDur += updated.Sub(created)
-							count++
-						}
-					}
-				}
-				if count > 0 {
-					stats.AverageResolutionTime = totalDur / time.Duration(count)
-				}
-			} else {
-				log.Printf("统计平均解决时间失败: %v", err)
+				log.Printf("获取MySQL统计信息失败: %v", err)
 			}
 		}
 	} else {
@@ -624,62 +581,19 @@ func (api *AlertAPI) computeAlertStats() *AlertStats {
 			log.Printf("统计总告警失败: %v", err)
 		}
 
-		// 分布与平均解决时间（SQLite下）
-		if sqlite, ok := api.storage.(*SQLiteStorage); ok && sqlite.DB != nil {
-			// 严重级别分布
-			rows, err := sqlite.DB.Query("SELECT severity, COUNT(1) FROM alerts WHERE created_at >= ? GROUP BY severity", sinceStr)
+		// 分布与平均解决时间（MySQL下）
+		if mysql, ok := api.storage.(*MySQLStorage); ok && mysql.DB != nil {
+			active, resolved, falsePositives, total, severityDist, categoryDist, avgResolution, err := mysql.GetAlertStats(api.startTime)
 			if err == nil {
-				defer rows.Close()
-				stats.SeverityDistribution = map[string]uint64{}
-				for rows.Next() {
-					var sev string
-					var cnt int
-					if err := rows.Scan(&sev, &cnt); err == nil {
-						stats.SeverityDistribution[sev] = uint64(cnt)
-					}
-				}
+				stats.ActiveAlerts = active
+				stats.ResolvedAlerts = resolved
+				stats.FalsePositives = falsePositives
+				stats.TotalAlerts = total
+				stats.SeverityDistribution = severityDist
+				stats.CategoryDistribution = categoryDist
+				stats.AverageResolutionTime = avgResolution
 			} else {
-				log.Printf("统计严重级别分布失败: %v", err)
-			}
-
-			// 类别分布
-			rows2, err := sqlite.DB.Query("SELECT category, COUNT(1) FROM alerts WHERE created_at >= ? GROUP BY category", sinceStr)
-			if err == nil {
-				defer rows2.Close()
-				stats.CategoryDistribution = map[string]uint64{}
-				for rows2.Next() {
-					var cat string
-					var cnt int
-					if err := rows2.Scan(&cat, &cnt); err == nil {
-						stats.CategoryDistribution[cat] = uint64(cnt)
-					}
-				}
-			} else {
-				log.Printf("统计类别分布失败: %v", err)
-			}
-
-			// 平均解决时间（updated_at - created_at 近似）
-			rows3, err := sqlite.DB.Query("SELECT created_at, updated_at FROM alerts WHERE status = ? AND created_at >= ?", string(AlertStatusResolved), sinceStr)
-			if err == nil {
-				defer rows3.Close()
-				var totalDur time.Duration
-				var count int
-				for rows3.Next() {
-					var createdStr, updatedStr string
-					if err := rows3.Scan(&createdStr, &updatedStr); err == nil {
-						created, err1 := time.Parse(time.RFC3339, createdStr)
-						updated, err2 := time.Parse(time.RFC3339, updatedStr)
-						if err1 == nil && err2 == nil && updated.After(created) {
-							totalDur += updated.Sub(created)
-							count++
-						}
-					}
-				}
-				if count > 0 {
-					stats.AverageResolutionTime = totalDur / time.Duration(count)
-				}
-			} else {
-				log.Printf("统计平均解决时间失败: %v", err)
+				log.Printf("获取MySQL统计信息失败: %v", err)
 			}
 		}
 		return &stats

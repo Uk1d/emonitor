@@ -358,6 +358,22 @@
                     headers: authHeaders()
                 });
                 const data = await resp.json();
+                // 如果认证服务初始化失败（MySQL未连接），显示错误提示
+                if (data.message && data.message.includes('初始化失败')) {
+                    showError('数据库连接失败，请检查 MySQL 配置');
+                    if (els.userInfo) {
+                        els.userInfo.textContent = '连接错误';
+                    }
+                    return;
+                }
+                // 如果认证服务未启用，显示配置提示
+                if (data.message && data.message.includes('未启用')) {
+                    showError('认证服务未配置，请设置 MySQL 连接');
+                    if (els.userInfo) {
+                        els.userInfo.textContent = '未配置';
+                    }
+                    return;
+                }
                 if (!data.authenticated) {
                     window.location.href = '/login';
                     return;
@@ -367,7 +383,19 @@
                 }
             } catch(e) {
                 console.error('检查认证状态失败:', e);
+                showError('服务连接失败');
             }
+        }
+
+        // 显示错误提示
+        function showError(message) {
+            const existing = document.getElementById('db-error-banner');
+            if (existing) return;
+            const banner = document.createElement('div');
+            banner.id = 'db-error-banner';
+            banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#ef4444;color:white;padding:12px 20px;text-align:center;z-index:9999;font-size:14px;';
+            banner.innerHTML = '<strong>错误:</strong> ' + message + ' <button onclick="this.parentElement.remove()" style="margin-left:10px;padding:2px 8px;background:rgba(255,255,255,0.2);border:none;color:white;border-radius:4px;cursor:pointer;">关闭</button>';
+            document.body.appendChild(banner);
         }
 
         // 设置主题切换

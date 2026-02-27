@@ -44,6 +44,7 @@ VMLINUX_H := $(BPF_SRC_DIR)/vmlinux.h
 MAIN_BINARY := $(BIN_DIR)/etracee
 TEST_BINARY := $(BIN_DIR)/etracee_test
 IMPORTER_BINARY := $(BIN_DIR)/rule_importer
+WEBSERVER_BINARY := $(BIN_DIR)/webserver
 
 # 配置文件
 DEFAULT_CONFIG := $(CONFIG_DIR)/enhanced_security_config.yaml
@@ -149,6 +150,19 @@ build-tools: $(BIN_DIR)
 	cd $(GO_SRC_DIR)/tools/rule_importer && $(GO) build $(GO_BUILD_FLAGS) -o $(IMPORTER_BINARY) .
 	@printf "$(GREEN)工具程序构建完成$(NC)\n"
 
+# 构建独立 Web 服务（无需 root 权限运行）
+.PHONY: build-web
+build-web: $(BIN_DIR)
+	@printf "$(BLUE)=== 构建独立 Web 服务 ===$(NC)\n"
+	cd $(GO_SRC_DIR)/cmd/webserver && $(GO) build $(GO_BUILD_FLAGS) -o $(WEBSERVER_BINARY) .
+	@printf "$(GREEN)独立 Web 服务构建完成: $(WEBSERVER_BINARY)$(NC)\n"
+	@printf "$(YELLOW)提示: Web 服务可运行在普通用户权限下$(NC)\n"
+
+# 构建所有组件
+.PHONY: build-all
+build-all: build build-web build-tools
+	@printf "$(GREEN)所有组件构建完成$(NC)\n"
+
 $(BIN_DIR):
 	@mkdir -p $(BIN_DIR)
 
@@ -184,6 +198,31 @@ run-dashboard: build
 run-dev: build-debug
 	@printf "$(BLUE)=== 启动 eTracee 开发模式（需要 root 权限） ===$(NC)\n"
 	sudo $(MAIN_BINARY) -config $(DEFAULT_CONFIG) -dashboard
+
+# 分离模式：监控程序以 monitor-only 模式运行（需要 root）
+.PHONY: run-monitor
+run-monitor: build
+	@printf "$(BLUE)=== 启动监控程序（分离模式，需要 root 权限） ===$(NC)\n"
+	@printf "$(YELLOW)提示: 此模式仅运行监控程序，Web 服务需单独启动$(NC)\n"
+	sudo $(MAIN_BINARY) -config $(DEFAULT_CONFIG) -monitor-only
+
+# 分离模式：启动独立 Web 服务（无需 root）
+.PHONY: run-web
+run-web: build-web
+	@printf "$(BLUE)=== 启动独立 Web 服务（无需 root 权限） ===$(NC)\n"
+	@printf "$(YELLOW)提示: 需要先启动监控程序 (make run-monitor)$(NC)\n"
+	$(WEBSERVER_BINARY)
+
+# 分离模式：同时启动监控程序和 Web 服务（需要 root）
+.PHONY: run-split
+run-split: build build-web
+	@printf "$(BLUE)=== 启动分离模式（监控程序 + Web 服务） ===$(NC)\n"
+	@printf "$(YELLOW)监控程序需要 root 权限，Web 服务使用普通用户权限$(NC)\n"
+	@printf "$(GREEN)启动监控程序...$(NC)\n"
+	sudo $(MAIN_BINARY) -config $(DEFAULT_CONFIG) -monitor-only &
+	@sleep 2
+	@printf "$(GREEN)启动 Web 服务...$(NC)\n"
+	$(WEBSERVER_BINARY)
 
 # ==================== 清理 ====================
 .PHONY: clean
@@ -267,13 +306,20 @@ help:
 	@printf "$(GREEN)主要构建命令:$(NC)\n"
 	@printf "  make all           - 完整构建（检查环境 + 构建 eBPF + 构建 Go）\n"
 	@printf "  make build         - 仅构建 Go 用户态程序（需要先构建 eBPF）\n"
+	@printf "  make build-web     - 构建独立 Web 服务（无需 root 权限运行）\n"
+	@printf "  make build-all     - 构建所有组件\n"
 	@printf "  make bpf           - 仅构建 eBPF 程序\n"
 	@printf "  make clean         - 清理构建产物\n"
 	@printf "\n"
-	@printf "$(GREEN)运行命令:$(NC)\n"
+	@printf "$(GREEN)运行命令（集成模式）:$(NC)\n"
 	@printf "  make run           - 启动 eTracee（需要 root 权限）\n"
 	@printf "  make run-dashboard - 启动 eTracee 并显示 Dashboard\n"
 	@printf "  make run-dev       - 启动开发调试模式\n"
+	@printf "\n"
+	@printf "$(GREEN)运行命令（分离模式 - 推荐）:$(NC)\n"
+	@printf "  make run-monitor   - 仅启动监控程序（需要 root）\n"
+	@printf "  make run-web       - 仅启动 Web 服务（无需 root）\n"
+	@printf "  make run-split     - 同时启动监控程序和 Web 服务\n"
 	@printf "\n"
 	@printf "$(GREEN)测试命令:$(NC)\n"
 	@printf "  make test          - 运行单元测试\n"

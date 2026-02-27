@@ -536,3 +536,80 @@ func (s *MySQLStorage) GetStats() (map[string]interface{}, error) {
 
 	return stats, nil
 }
+
+// GetAlertStats 获取告警详细统计（用于 Web 展示）
+func (s *MySQLStorage) GetAlertStats(since time.Time) (active, resolved, falsePositives, total uint64, severityDist, categoryDist map[string]uint64, avgResolution time.Duration, err error) {
+	if s.DB == nil {
+		return 0, 0, 0, 0, nil, nil, 0, nil
+	}
+
+	sinceStr := since.Format("2006-01-02 15:04:05")
+
+	// 活跃告警（new, acknowledged, in_progress）
+	activeStatuses := []string{"new", "acknowledged", "in_progress"}
+	for _, status := range activeStatuses {
+		var count int64
+		if e := s.DB.QueryRow("SELECT COUNT(*) FROM alerts WHERE status = ? AND created_at >= ?", status, sinceStr).Scan(&count); e == nil {
+			active += uint64(count)
+		}
+	}
+
+	// 已解决告警
+	s.DB.QueryRow("SELECT COUNT(*) FROM alerts WHERE status = 'resolved' AND created_at >= ?", sinceStr).Scan(&resolved)
+
+	// 误报告警
+	s.DB.QueryRow("SELECT COUNT(*) FROM alerts WHERE status = 'false_positive' AND created_at >= ?", sinceStr).Scan(&falsePositives)
+
+	// 总告警数
+	s.DB.QueryRow("SELECT COUNT(*) FROM alerts WHERE created_at >= ?", sinceStr).Scan(&total)
+
+	// 严重级别分布
+	severityDist = make(map[string]uint64)
+	rows, e := s.DB.Query("SELECT severity, COUNT(*) FROM alerts WHERE created_at >= ? GROUP BY severity", sinceStr)
+	if e == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var sev string
+			var count int64
+			if rows.Scan(&sev, &count) == nil {
+				severityDist[sev] = uint64(count)
+			}
+		}
+	}
+
+	// 类别分布
+	categoryDist = make(map[string]uint64)
+	rows2, e := s.DB.Query("SELECT category, COUNT(*) FROM alerts WHERE created_at >= ? GROUP BY category", sinceStr)
+	if e == nil {
+		defer rows2.Close()
+		for rows2.Next() {
+			var cat string
+			var count int64
+			if rows2.Scan(&cat, &count) == nil {
+				categoryDist[cat] = uint64(count)
+			}
+		}
+	}
+
+	// 平均解决时间
+	rows3, e := s.DB.Query("SELECT created_at, updated_at FROM alerts WHERE status = 'resolved' AND created_at >= ?", sinceStr)
+	if e == nil {
+		defer rows3.Close()
+		var totalDur time.Duration
+		var count int
+		for rows3.Next() {
+			var created, updated time.Time
+			if rows3.Scan(&created, &updated) == nil {
+				if updated.After(created) {
+					totalDur += updated.Sub(created)
+					count++
+				}
+			}
+		}
+		if count > 0 {
+			avgResolution = totalDur / time.Duration(count)
+		}
+	}
+
+	return active, resolved, falsePositives, total, severityDist, categoryDist, avgResolution, nil
+}

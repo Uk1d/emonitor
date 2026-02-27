@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"etracee/internal/auth"
 	"etracee/internal/common/config"
+	"etracee/internal/dbconfig"
 	"flag"
 	"fmt"
 	"log"
@@ -580,33 +581,31 @@ func main() {
 	}
 	alertManager := NewAlertManager(alertManagerConfig)
 
-	// 读取并初始化存储配置
-	// 优先级：环境变量 > 配置文件
-	storageCfg := GetStorageConfigFromEnv()
-	if storageCfg == nil {
-		// 尝试从配置文件加载
-		configPaths := []string{
-			"config/storage.yaml",
-			"/etc/etracee/storage.yaml",
-		}
-		for _, configPath := range configPaths {
-			if cfg, err := LoadStorageConfig(configPath); err == nil && cfg != nil {
-				storageCfg = cfg
-				break
-			}
-		}
+	// 加载配置文件
+	appCfg, err := dbconfig.LoadAppConfig()
+	if err != nil {
+		log.Fatalf("[!] 加载配置文件失败: %v", err)
 	}
+
+	// 初始化存储（使用监控数据库）
 	var storage Storage
-	if storageCfg != nil {
-		st, err := NewStorageFromConfig(storageCfg)
-		if err != nil {
-			log.Printf("初始化存储失败: %v", err)
-		} else {
-			storage = st
-			alertManager.SetStorage(storage)
-			log.Printf("[+] 存储后端已初始化: %s (数据库: %s)", storageCfg.Backend, storageCfg.MySQL.Database)
-		}
+	monitorDBCfg := appCfg.GetMonitorDBConfig()
+	mysqlCfg := &MySQLStorageConfig{
+		Host:            monitorDBCfg.Host,
+		Port:            monitorDBCfg.Port,
+		User:            monitorDBCfg.User,
+		Password:        monitorDBCfg.Password,
+		Database:        monitorDBCfg.Database,
+		MaxOpenConns:    monitorDBCfg.MaxOpenConns,
+		MaxIdleConns:    monitorDBCfg.MaxIdleConns,
+		ConnMaxLifetime: monitorDBCfg.ConnMaxLifetime,
 	}
+	storage = NewMySQLStorage(mysqlCfg)
+	if err := storage.Init(); err != nil {
+		log.Fatalf("[!] 存储初始化失败: %v", err)
+	}
+	alertManager.SetStorage(storage)
+	log.Printf("[+] 存储后端已初始化: MySQL (数据库: %s)", mysqlCfg.Database)
 
 	alertManager.RegisterProcessor(NewThreatIntelProcessor())
 

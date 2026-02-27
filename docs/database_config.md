@@ -4,40 +4,106 @@
 
 eTracee 使用 MySQL 作为主要数据存储，采用双数据库架构：
 
-| 数据库 | 用途 | 默认名称 |
-|--------|------|----------|
-| 事件流数据库 | 存储 eBPF 事件和告警数据 | `etracee_events` |
-| 认证数据库 | 存储 Web 认证用户和会话 | `etracee_auth` |
+| 数据库 | 用途 | 默认名称 | 使用者 |
+|--------|------|----------|--------|
+| 监控程序数据库 | 存储 eBPF 事件和告警数据 | `etracee_events` | 监控程序 (root) |
+| Web 服务数据库 | 存储 Web 认证用户和会话 | `etracee_web` | Web 服务 (普通用户) |
 
 这种分离架构有以下优势：
+- **安全隔离**：Web 服务无需 root 权限，认证数据与监控数据物理分离
 - **性能隔离**：高频事件写入不影响认证服务
-- **安全隔离**：认证数据与业务数据物理分离
 - **独立扩展**：可根据负载情况独立优化各数据库
+- **权限分离**：监控程序和 Web 服务可使用不同的数据库账户
+
+## 数据库表结构
+
+### 监控程序数据库 (etracee_events)
+
+```sql
+-- 事件表
+CREATE TABLE events (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    timestamp DATETIME(3) NOT NULL,
+    pid INT UNSIGNED,
+    uid INT UNSIGNED,
+    comm VARCHAR(255),
+    event_type VARCHAR(64) NOT NULL,
+    filename VARCHAR(512),
+    severity VARCHAR(32),
+    rule_matched VARCHAR(255),
+    raw_json JSON,
+    INDEX idx_events_timestamp (timestamp),
+    INDEX idx_events_event_type (event_type)
+);
+
+-- 告警表
+CREATE TABLE alerts (
+    id VARCHAR(64) PRIMARY KEY,
+    rule_name VARCHAR(255) NOT NULL,
+    severity VARCHAR(32) NOT NULL,
+    category VARCHAR(64),
+    description TEXT,
+    pid INT UNSIGNED,
+    uid INT UNSIGNED,
+    comm VARCHAR(255),
+    filename VARCHAR(512),
+    status VARCHAR(32) DEFAULT 'new',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_alerts_created_at (created_at),
+    INDEX idx_alerts_severity (severity),
+    INDEX idx_alerts_status (status)
+);
+```
+
+### Web 服务数据库 (etracee_web)
+
+```sql
+-- 用户表
+CREATE TABLE users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(64) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(32) DEFAULT 'user',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- 会话表
+CREATE TABLE sessions (
+    id VARCHAR(64) PRIMARY KEY,
+    user_id INT NOT NULL,
+    expires_at DATETIME NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_sessions_user_id (user_id),
+    INDEX idx_sessions_expires (expires_at)
+);
+```
 
 ## 环境变量配置
 
-### 事件流数据库配置
+### 监控程序数据库配置
 
 | 环境变量 | 说明 | 默认值 |
 |---------|------|--------|
-| `MYSQL_EVENTS_HOST` | 事件数据库主机 | `localhost` |
+| `MYSQL_EVENTS_HOST` | 事件数据库主机 | 使用 `MYSQL_HOST` |
 | `MYSQL_EVENTS_PORT` | 事件数据库端口 | `3306` |
-| `MYSQL_EVENTS_USER` | 事件数据库用户名 | `root` |
-| `MYSQL_EVENTS_PASSWORD` | 事件数据库密码 | (空) |
+| `MYSQL_EVENTS_USER` | 事件数据库用户名 | 使用 `MYSQL_USER` |
+| `MYSQL_EVENTS_PASSWORD` | 事件数据库密码 | 使用 `MYSQL_PASSWORD` |
 | `MYSQL_EVENTS_DATABASE` | 事件数据库名称 | `etracee_events` |
 | `MYSQL_MAX_OPEN_CONNS` | 最大连接数 | `50` |
 | `MYSQL_MAX_IDLE_CONNS` | 最大空闲连接数 | `10` |
 | `MYSQL_CONN_MAX_LIFETIME` | 连接最大生命周期(秒) | `3600` |
 
-### 认证数据库配置
+### Web 服务数据库配置
 
 | 环境变量 | 说明 | 默认值 |
 |---------|------|--------|
-| `MYSQL_AUTH_HOST` | 认证数据库主机 | 使用 `MYSQL_HOST` |
-| `MYSQL_AUTH_PORT` | 认证数据库端口 | `3306` |
-| `MYSQL_AUTH_USER` | 认证数据库用户名 | 使用 `MYSQL_USER` |
-| `MYSQL_AUTH_PASSWORD` | 认证数据库密码 | 使用 `MYSQL_PASSWORD` |
-| `MYSQL_AUTH_DATABASE` | 认证数据库名称 | `etracee_auth` |
+| `MYSQL_WEB_HOST` | Web 数据库主机 | 使用 `MYSQL_HOST` |
+| `MYSQL_WEB_PORT` | Web 数据库端口 | `3306` |
+| `MYSQL_WEB_USER` | Web 数据库用户名 | 使用 `MYSQL_USER` |
+| `MYSQL_WEB_PASSWORD` | Web 数据库密码 | 使用 `MYSQL_PASSWORD` |
+| `MYSQL_WEB_DATABASE` | Web 数据库名称 | `etracee_web` |
 | `ADMIN_USERNAME` | 管理员用户名 | `admin` |
 | `ADMIN_PASSWORD` | 管理员密码 | `admin123` |
 | `JWT_SECRET` | JWT 签名密钥 | (随机生成) |
@@ -51,12 +117,28 @@ eTracee 使用 MySQL 作为主要数据存储，采用双数据库架构：
 | `MYSQL_USER` | MySQL 用户名 | `root` |
 | `MYSQL_PASSWORD` | MySQL 密码 | (空) |
 
-### 其他配置
+## 配置文件
 
-| 环境变量 | 说明 | 默认值 |
-|---------|------|--------|
-| `ETRACEE_RETENTION_DAYS` | 数据保留天数 | `30` |
-| `ETRACEE_STORAGE_BACKEND` | 存储后端 | `mysql` |
+### config/storage.yaml
+
+```yaml
+storage:
+  backend: mysql
+
+  # 监控程序数据库
+  mysql:
+    host: localhost
+    port: 3306
+    user: root
+    password: ""
+    database: etracee_events
+    max_open_conns: 50
+    max_idle_conns: 10
+    conn_max_lifetime_seconds: 3600
+
+  # 数据保留策略
+  retention_days: 30
+```
 
 ## 快速启动
 
@@ -64,24 +146,45 @@ eTracee 使用 MySQL 作为主要数据存储，采用双数据库架构：
 
 确保系统已安装 MySQL Community Server 8.0+。
 
+```bash
+# Ubuntu/Debian
+sudo apt install -y mysql-server
+
+# CentOS/RHEL
+sudo yum install -y mysql-server
+```
+
 ### 2. 创建数据库
 
 ```bash
 # 登录 MySQL
 mysql -u root -p
 
-# 执行初始化脚本
-source scripts/init_db.sql
+# 创建数据库和用户
+CREATE DATABASE etracee_events CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE etracee_web CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+# 创建专用用户（推荐）
+CREATE USER 'etracee_events'@'localhost' IDENTIFIED BY 'your_password';
+CREATE USER 'etracee_web'@'localhost' IDENTIFIED BY 'your_password';
+
+GRANT ALL PRIVILEGES ON etracee_events.* TO 'etracee_events'@'localhost';
+GRANT ALL PRIVILEGES ON etracee_web.* TO 'etracee_web'@'localhost';
+FLUSH PRIVILEGES;
 ```
 
 ### 3. 配置环境变量
 
 ```bash
-# MySQL 连接配置
-export MYSQL_HOST=localhost
-export MYSQL_PORT=3306
-export MYSQL_USER=root
-export MYSQL_PASSWORD=your_password
+# 监控程序数据库
+export MYSQL_EVENTS_HOST=localhost
+export MYSQL_EVENTS_USER=etracee_events
+export MYSQL_EVENTS_PASSWORD=your_password
+
+# Web 服务数据库
+export MYSQL_WEB_HOST=localhost
+export MYSQL_WEB_USER=etracee_web
+export MYSQL_WEB_PASSWORD=your_password
 
 # 管理员账户
 export ADMIN_USERNAME=admin
@@ -94,12 +197,13 @@ export JWT_SECRET=your_random_secret_key_here
 ### 4. 启动服务
 
 ```bash
-./etracee
+# 分离模式（推荐）
+# 终端 1: 启动监控程序（需要 root）
+sudo ./bin/etracee -monitor-only
+
+# 终端 2: 启动 Web 服务（无需 root）
+./bin/webserver
 ```
-
-### 5. 访问 Web 界面
-
-打开浏览器访问 `http://localhost:8888`
 
 ## Docker Compose 示例
 
@@ -112,54 +216,46 @@ services:
       MYSQL_ROOT_PASSWORD: your_root_password
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
     ports:
       - "3306:3306"
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
 
-  etracee:
+  monitor:
     build: .
     environment:
-      # MySQL 配置
-      MYSQL_HOST: mysql
-      MYSQL_PORT: 3306
-      MYSQL_USER: root
-      MYSQL_PASSWORD: your_root_password
+      # 监控程序数据库
+      MYSQL_EVENTS_HOST: mysql
+      MYSQL_EVENTS_USER: root
+      MYSQL_EVENTS_PASSWORD: your_root_password
+      MYSQL_EVENTS_DATABASE: etracee_events
+    depends_on:
+      - mysql
+    privileged: true
+    command: ["./etracee", "-monitor-only"]
 
+  webserver:
+    build: .
+    environment:
+      # Web 服务数据库
+      MYSQL_WEB_HOST: mysql
+      MYSQL_WEB_USER: root
+      MYSQL_WEB_PASSWORD: your_root_password
+      MYSQL_WEB_DATABASE: etracee_web
       # 管理员账户
       ADMIN_USERNAME: admin
       ADMIN_PASSWORD: your_secure_password
       JWT_SECRET: your_random_secret_key_here
-
-      # 数据保留
-      ETRACEE_RETENTION_DAYS: 30
+      # 监控程序连接
+      MONITOR_URL: ws://monitor:8889/ws
     depends_on:
       - mysql
+      - monitor
     ports:
       - "8888:8888"
-    privileged: true
+    command: ["./webserver"]
 
 volumes:
   mysql_data:
-```
-
-## YAML 配置文件
-
-可以在 `config/storage.yaml` 中配置存储：
-
-```yaml
-storage:
-  backend: mysql
-  retention_days: 30
-  mysql:
-    host: localhost
-    port: 3306
-    user: root
-    password: your_password
-    database: etracee_events
-    max_open_conns: 50
-    max_idle_conns: 10
-    conn_max_lifetime_seconds: 3600
 ```
 
 ## 数据保留策略
@@ -202,6 +298,7 @@ CREATE INDEX idx_alerts_status_time ON alerts(status, created_at);
    - 修改默认管理员密码
    - 设置强密码策略
    - 配置固定的 JWT_SECRET
+   - 为监控程序和 Web 服务使用不同的数据库账户
    - 启用 TLS 加密
 
 2. **高可用配置**
@@ -223,15 +320,17 @@ CREATE INDEX idx_alerts_status_time ON alerts(status, created_at);
 3. 确认防火墙规则允许连接
 4. 检查 MySQL 是否允许远程连接
 
+### 认证服务不可用
+
+如果看到 `认证服务未启用` 提示：
+
+1. 确认已设置 `MYSQL_WEB_HOST` 等环境变量
+2. 确认 `etracee_web` 数据库已创建
+3. 检查 Web 服务日志中的错误信息
+
 ### 性能问题
 
 1. 检查索引是否正确创建
 2. 调整连接池大小
 3. 考虑分区表策略
 4. 监控慢查询日志
-
-### 磁盘空间
-
-1. 调整数据保留天数
-2. 定期清理过期数据
-3. 考虑使用压缩表

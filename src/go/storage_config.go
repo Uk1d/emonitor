@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"strconv"
 
 	"gopkg.in/yaml.v2"
@@ -12,19 +11,12 @@ type storageRoot struct {
 	Storage StorageConfig `yaml:"storage"`
 }
 
-// StorageConfig 存储配置
+// StorageConfig 存储配置（MySQL）
 type StorageConfig struct {
-	Backend string `yaml:"backend"` // mysql, sqlite
+	Backend string `yaml:"backend"` // mysql
 
 	// MySQL 配置
 	MySQL MySQLStorageConfig `yaml:"mysql"`
-
-	// SQLite 配置（保留以兼容，但不再推荐使用）
-	SQLite struct {
-		Path        string `yaml:"path"`
-		JournalMode string `yaml:"journal_mode"`
-		Synchronous string `yaml:"synchronous"`
-	} `yaml:"sqlite"`
 
 	// 数据保留策略
 	RetentionDays int `yaml:"retention_days"` // 数据保留天数，0表示永久保留
@@ -86,17 +78,6 @@ func LoadStorageConfig(path string) (*StorageConfig, error) {
 		cfg.MySQL.ConnMaxLifetime = 3600
 	}
 
-	// SQLite 默认值（兼容旧配置）
-	if cfg.SQLite.Path == "" {
-		cfg.SQLite.Path = filepath.ToSlash("data/etracee.db")
-	}
-	if cfg.SQLite.JournalMode == "" {
-		cfg.SQLite.JournalMode = "WAL"
-	}
-	if cfg.SQLite.Synchronous == "" {
-		cfg.SQLite.Synchronous = "NORMAL"
-	}
-
 	// 数据保留默认值
 	if cfg.RetentionDays == 0 {
 		cfg.RetentionDays = 30
@@ -108,7 +89,7 @@ func LoadStorageConfig(path string) (*StorageConfig, error) {
 // GetStorageConfigFromEnv 从环境变量获取存储配置
 func GetStorageConfigFromEnv() *StorageConfig {
 	cfg := &StorageConfig{
-		Backend: getEnvOrDefault("ETRACEE_STORAGE_BACKEND", "mysql"),
+		Backend: "mysql",
 		MySQL: MySQLStorageConfig{
 			Host:            getEnvOrDefault("MYSQL_EVENTS_HOST", getEnvOrDefault("MYSQL_HOST", "localhost")),
 			Port:            getEnvIntOrDefault("MYSQL_EVENTS_PORT", getEnvIntOrDefault("MYSQL_PORT", 3306)),
@@ -121,11 +102,6 @@ func GetStorageConfigFromEnv() *StorageConfig {
 		},
 		RetentionDays: getEnvIntOrDefault("ETRACEE_RETENTION_DAYS", 30),
 	}
-
-	// SQLite 配置（兼容）
-	cfg.SQLite.Path = getEnvOrDefault("ETRACEE_SQLITE_PATH", "data/etracee.db")
-	cfg.SQLite.JournalMode = getEnvOrDefault("ETRACEE_SQLITE_JOURNAL_MODE", "WAL")
-	cfg.SQLite.Synchronous = getEnvOrDefault("ETRACEE_SQLITE_SYNCHRONOUS", "NORMAL")
 
 	return cfg
 }
