@@ -435,24 +435,22 @@ func (a *AuthService) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// 对于 HTML 页面请求，放行让前端 JavaScript 处理认证检查
+		// 这避免了浏览器请求 HTML 时不带 Authorization header 导致的重定向循环
+		if strings.Contains(r.Header.Get("Accept"), "text/html") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// 对于 API 请求，需要验证 token
 		token := extractToken(r)
 		if token == "" {
-			// 对于HTML请求，重定向到登录页
-			if strings.Contains(r.Header.Get("Accept"), "text/html") {
-				http.Redirect(w, r, "/login", http.StatusFound)
-				return
-			}
 			http.Error(w, `{"error": "未授权访问"}`, http.StatusUnauthorized)
 			return
 		}
 
 		session, err := a.ValidateToken(token)
 		if err != nil {
-			// 对于HTML请求，重定向到登录页
-			if strings.Contains(r.Header.Get("Accept"), "text/html") {
-				http.Redirect(w, r, "/login", http.StatusFound)
-				return
-			}
 			http.Error(w, `{"error": "令牌无效或已过期"}`, http.StatusUnauthorized)
 			return
 		}
