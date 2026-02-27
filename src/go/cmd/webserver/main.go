@@ -177,8 +177,8 @@ func (s *WebServer) buildHandler() http.Handler {
 	// 应用 CORS 中间件
 	handler = s.corsMiddleware.Wrap(handler)
 
-	// 应用路径规范化
-	handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// 应用路径规范化（注意：必须使用新的变量名避免递归）
+	finalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		for strings.Contains(p, "//") {
 			p = strings.ReplaceAll(p, "//", "/")
@@ -187,12 +187,17 @@ func (s *WebServer) buildHandler() http.Handler {
 		if p == "." {
 			p = "/"
 		}
-		r2 := r.Clone(r.Context())
-		r2.URL.Path = p
-		handler.ServeHTTP(w, r2)
+		// 只有路径改变时才需要修改请求
+		if p != r.URL.Path {
+			r2 := r.Clone(r.Context())
+			r2.URL.Path = p
+			handler.ServeHTTP(w, r2)
+			return
+		}
+		handler.ServeHTTP(w, r)
 	})
 
-	return handler
+	return finalHandler
 }
 
 // SetAuthService 设置认证服务并重建处理器链

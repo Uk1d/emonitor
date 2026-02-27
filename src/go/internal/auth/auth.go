@@ -84,7 +84,31 @@ var (
 func InitAuth(cfg *Config) (*AuthService, error) {
 	var initErr error
 	authOnce.Do(func() {
-		// 构建MySQL连接字符串
+		// 先尝试创建数据库（如果不存在）
+		dsnWithoutDB := fmt.Sprintf("%s:%s@tcp(%s:%d)/?parseTime=true&charset=utf8mb4",
+			cfg.MySQLUser,
+			cfg.MySQLPassword,
+			cfg.MySQLHost,
+			cfg.MySQLPort,
+		)
+
+		tmpDB, err := sql.Open("mysql", dsnWithoutDB)
+		if err != nil {
+			initErr = fmt.Errorf("连接MySQL失败: %w", err)
+			return
+		}
+
+		// 创建数据库（如果不存在）
+		_, err = tmpDB.Exec(fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", cfg.MySQLDatabase))
+		if err != nil {
+			tmpDB.Close()
+			initErr = fmt.Errorf("创建数据库失败: %w", err)
+			return
+		}
+		tmpDB.Close()
+		log.Printf("[+] 数据库 '%s' 已就绪", cfg.MySQLDatabase)
+
+		// 连接到目标数据库
 		dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4",
 			cfg.MySQLUser,
 			cfg.MySQLPassword,
