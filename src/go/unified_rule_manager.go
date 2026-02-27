@@ -10,15 +10,15 @@ import (
 	"sync"
 	"time"
 
-	rule "etracee/internal/core/rule"
-	falco "etracee/internal/core/rule/parsers/falco"
-	tracee "etracee/internal/core/rule/parsers/tracee"
+	"etracee/internal/engine"
+	"etracee/internal/engine/parser/falco"
+	"etracee/internal/engine/parser/tracee"
 	"gopkg.in/yaml.v2"
 )
 
 type UnifiedRuleManager struct {
 	mu           sync.RWMutex
-	engine       *rule.Engine
+	engine       *engine.Engine
 	bridge       *RuleEngineBridge
 	configPath   string
 	falcoParser  *falco.Parser
@@ -32,12 +32,12 @@ func NewUnifiedRuleManager(configPath string) *UnifiedRuleManager {
 		traceeParser: tracee.NewTraceeParser(),
 	}
 
-	engineConfig := &rule.EngineConfig{
+	engineConfig := &engine.EngineConfig{
 		EnableStats:     true,
 		MaxHistory:      1000,
 		DefaultThrottle: 60 * time.Second,
 	}
-	mgr.engine = rule.NewEngine(engineConfig)
+	mgr.engine = engine.NewEngine(engineConfig)
 	mgr.bridge = NewRuleEngineBridge(engineConfig)
 
 	return mgr
@@ -84,14 +84,14 @@ func (m *UnifiedRuleManager) loadYAMLConfig(data []byte) error {
 	}
 
 	if len(rawConfig.Rules) > 0 {
-		source := rule.SourceNative
+		source := engine.SourceNative
 		if strings.ToLower(rawConfig.Source) == "falco" {
-			source = rule.SourceFalco
+			source = engine.SourceFalco
 		} else if strings.ToLower(rawConfig.Source) == "tracee" {
-			source = rule.SourceTracee
+			source = engine.SourceTracee
 		}
 
-		rs := rule.NewRuleSet("inline-rules", source)
+		rs := engine.NewRuleSet("inline-rules", source)
 		for _, r := range rawConfig.Rules {
 			ur := m.parseRuleFromMap(r, source)
 			if ur != nil {
@@ -118,7 +118,7 @@ func (m *UnifiedRuleManager) loadLegacyYAMLConfig(data []byte) error {
 		return fmt.Errorf("failed to parse YAML config: %w", err)
 	}
 
-	rs := rule.NewRuleSet("legacy-rules", rule.SourceNative)
+	rs := engine.NewRuleSet("legacy-rules", engine.SourceNative)
 
 	for category, rules := range config.DetectionRules {
 		for _, r := range rules {
@@ -128,7 +128,7 @@ func (m *UnifiedRuleManager) loadLegacyYAMLConfig(data []byte) error {
 					rs.AddRule(ur)
 				}
 			} else if ruleMap, ok := r.(map[string]interface{}); ok {
-				ur := m.parseRuleFromMap(ruleMap, rule.SourceNative)
+				ur := m.parseRuleFromMap(ruleMap, engine.SourceNative)
 				if ur != nil {
 					ur.Category = category
 					rs.AddRule(ur)
@@ -154,7 +154,7 @@ func (m *UnifiedRuleManager) loadJSONConfig(data []byte) error {
 		signatures = []map[string]interface{}{single}
 	}
 
-	rs := rule.NewRuleSet("json-rules", rule.SourceTracee)
+	rs := engine.NewRuleSet("json-rules", engine.SourceTracee)
 
 	for _, sig := range signatures {
 		ur := m.parseTraceeSignature(sig)
@@ -166,7 +166,7 @@ func (m *UnifiedRuleManager) loadJSONConfig(data []byte) error {
 	return m.engine.LoadRuleSet(rs)
 }
 
-func (m *UnifiedRuleManager) parseRuleFromMap(r map[string]interface{}, source rule.RuleSource) *rule.UnifiedRule {
+func (m *UnifiedRuleManager) parseRuleFromMap(r map[string]interface{}, source engine.RuleSource) *engine.UnifiedRule {
 	name, _ := r["name"].(string)
 	if name == "" {
 		name, _ = r["rule"].(string)
@@ -204,16 +204,16 @@ func (m *UnifiedRuleManager) parseRuleFromMap(r map[string]interface{}, source r
 		conditions = m.parseConditionString(condStr)
 	}
 
-	ur := &rule.UnifiedRule{
+	ur := &engine.UnifiedRule{
 		ID:          m.generateID(name, source),
 		Name:        name,
 		Description: desc,
 		Source:      source,
-		Severity:    rule.Severity(severity),
+		Severity:    engine.Severity(severity),
 		Category:    category,
 		Enabled:     enabled,
 		Conditions:  conditions,
-		LogicOp:     rule.LogicAND,
+		LogicOp:     engine.LogicAND,
 		Tags:        tags,
 		Actions:     actions,
 		Metadata:    r,
@@ -223,7 +223,7 @@ func (m *UnifiedRuleManager) parseRuleFromMap(r map[string]interface{}, source r
 	return ur
 }
 
-func (m *UnifiedRuleManager) parseLegacyRule(r map[interface{}]interface{}, category string) *rule.UnifiedRule {
+func (m *UnifiedRuleManager) parseLegacyRule(r map[interface{}]interface{}, category string) *engine.UnifiedRule {
 	getString := func(key string) string {
 		if v, ok := r[key]; ok {
 			if s, ok := v.(string); ok {
@@ -245,7 +245,7 @@ func (m *UnifiedRuleManager) parseLegacyRule(r map[interface{}]interface{}, cate
 		}
 	}
 
-	conditions := make([]rule.ConditionExpr, 0)
+	conditions := make([]engine.ConditionExpr, 0)
 	if conds, ok := r["conditions"].([]interface{}); ok {
 		for _, c := range conds {
 			if condMap, ok := c.(map[string]interface{}); ok {
@@ -257,16 +257,16 @@ func (m *UnifiedRuleManager) parseLegacyRule(r map[interface{}]interface{}, cate
 		}
 	}
 
-	ur := &rule.UnifiedRule{
-		ID:          m.generateID(name, rule.SourceNative),
+	ur := &engine.UnifiedRule{
+		ID:          m.generateID(name, engine.SourceNative),
 		Name:        name,
 		Description: getString("description"),
-		Source:      rule.SourceNative,
-		Severity:    rule.Severity(getString("severity")),
+		Source:      engine.SourceNative,
+		Severity:    engine.Severity(getString("severity")),
 		Category:    category,
 		Enabled:     enabled,
 		Conditions:  conditions,
-		LogicOp:     rule.LogicAND,
+		LogicOp:     engine.LogicAND,
 		Tags:        m.parseLegacyStringSlice(r["tags"]),
 		Actions:     m.parseLegacyStringSlice(r["actions"]),
 	}
@@ -275,7 +275,7 @@ func (m *UnifiedRuleManager) parseLegacyRule(r map[interface{}]interface{}, cate
 	return ur
 }
 
-func (m *UnifiedRuleManager) parseTraceeSignature(sig map[string]interface{}) *rule.UnifiedRule {
+func (m *UnifiedRuleManager) parseTraceeSignature(sig map[string]interface{}) *engine.UnifiedRule {
 	name, _ := sig["name"].(string)
 	if name == "" {
 		name, _ = sig["metadata"].(map[string]interface{})["name"].(string)
@@ -284,14 +284,14 @@ func (m *UnifiedRuleManager) parseTraceeSignature(sig map[string]interface{}) *r
 		return nil
 	}
 
-	conditions := make([]rule.ConditionExpr, 0)
+	conditions := make([]engine.ConditionExpr, 0)
 
 	events := m.extractEvents(sig)
 	if len(events) > 0 {
 		if len(events) == 1 {
-			conditions = append(conditions, &rule.ComparisonExpr{
+			conditions = append(conditions, &engine.ComparisonExpr{
 				Field:    "event_type",
-				Operator: rule.OpEquals,
+				Operator: engine.OpEquals,
 				Value:    events[0],
 			})
 		} else {
@@ -299,9 +299,9 @@ func (m *UnifiedRuleManager) parseTraceeSignature(sig map[string]interface{}) *r
 			for i, e := range events {
 				values[i] = e
 			}
-			conditions = append(conditions, &rule.ComparisonExpr{
+			conditions = append(conditions, &engine.ComparisonExpr{
 				Field:    "event_type",
-				Operator: rule.OpIn,
+				Operator: engine.OpIn,
 				Value:    values,
 			})
 		}
@@ -312,15 +312,15 @@ func (m *UnifiedRuleManager) parseTraceeSignature(sig map[string]interface{}) *r
 		severity = "medium"
 	}
 
-	ur := &rule.UnifiedRule{
+	ur := &engine.UnifiedRule{
 		ID:          sig["id"].(string),
 		Name:        name,
 		Description: sig["description"].(string),
-		Source:      rule.SourceTracee,
-		Severity:    rule.Severity(severity),
+		Source:      engine.SourceTracee,
+		Severity:    engine.Severity(severity),
 		Enabled:     len(conditions) > 0,
 		Conditions:  conditions,
-		LogicOp:     rule.LogicAND,
+		LogicOp:     engine.LogicAND,
 		Tags:        m.parseStringSlice(sig["tags"]),
 	}
 
@@ -332,13 +332,13 @@ func (m *UnifiedRuleManager) extractEvents(sig map[string]interface{}) []string 
 	events := make([]string, 0)
 
 	if e, ok := sig["event"].(string); ok && e != "" {
-		events = append(events, rule.MapEventType(e))
+		events = append(events, engine.MapEventType(e))
 	}
 
 	if es, ok := sig["events"].([]interface{}); ok {
 		for _, e := range es {
 			if s, ok := e.(string); ok {
-				events = append(events, rule.MapEventType(s))
+				events = append(events, engine.MapEventType(s))
 			}
 		}
 	}
@@ -346,13 +346,13 @@ func (m *UnifiedRuleManager) extractEvents(sig map[string]interface{}) []string 
 	return events
 }
 
-func (m *UnifiedRuleManager) parseCondition(cond map[string]interface{}) rule.ConditionExpr {
+func (m *UnifiedRuleManager) parseCondition(cond map[string]interface{}) engine.ConditionExpr {
 	if len(cond) == 0 {
 		return nil
 	}
 
 	for field, value := range cond {
-		mappedField, ok := rule.NewFalcoFieldMapper().Map(field)
+		mappedField, ok := engine.NewFalcoFieldMapper().Map(field)
 		if !ok {
 			mappedField = field
 		}
@@ -363,9 +363,9 @@ func (m *UnifiedRuleManager) parseCondition(cond map[string]interface{}) rule.Co
 		case map[string]interface{}:
 			return m.parseComplexCondition(mappedField, v)
 		case []interface{}:
-			return &rule.ComparisonExpr{
+			return &engine.ComparisonExpr{
 				Field:    mappedField,
-				Operator: rule.OpIn,
+				Operator: engine.OpIn,
 				Value:    v,
 			}
 		}
@@ -374,20 +374,20 @@ func (m *UnifiedRuleManager) parseCondition(cond map[string]interface{}) rule.Co
 	return nil
 }
 
-func (m *UnifiedRuleManager) parseValueCondition(field, value string) *rule.ComparisonExpr {
+func (m *UnifiedRuleManager) parseValueCondition(field, value string) *engine.ComparisonExpr {
 	if strings.HasPrefix(value, "regex:") {
-		return &rule.ComparisonExpr{
+		return &engine.ComparisonExpr{
 			Field:    field,
-			Operator: rule.OpRegex,
+			Operator: engine.OpRegex,
 			Value:    strings.TrimPrefix(value, "regex:"),
 		}
 	}
 
 	if strings.Contains(value, "*") {
 		pattern := strings.ReplaceAll(strings.ReplaceAll(value, "*", ".*"), ".", "\\.")
-		return &rule.ComparisonExpr{
+		return &engine.ComparisonExpr{
 			Field:    field,
-			Operator: rule.OpRegex,
+			Operator: engine.OpRegex,
 			Value:    "^" + pattern + "$",
 		}
 	}
@@ -397,94 +397,94 @@ func (m *UnifiedRuleManager) parseValueCondition(field, value string) *rule.Comp
 		return m.parseNumericCondition(field, value)
 	}
 
-	return &rule.ComparisonExpr{
+	return &engine.ComparisonExpr{
 		Field:    field,
-		Operator: rule.OpEquals,
+		Operator: engine.OpEquals,
 		Value:    value,
 	}
 }
 
-func (m *UnifiedRuleManager) parseNumericCondition(field, value string) *rule.ComparisonExpr {
+func (m *UnifiedRuleManager) parseNumericCondition(field, value string) *engine.ComparisonExpr {
 	if strings.HasPrefix(value, ">=") {
-		return &rule.ComparisonExpr{
+		return &engine.ComparisonExpr{
 			Field:    field,
-			Operator: rule.OpGTE,
+			Operator: engine.OpGTE,
 			Value:    strings.TrimPrefix(value, ">="),
 		}
 	}
 	if strings.HasPrefix(value, "<=") {
-		return &rule.ComparisonExpr{
+		return &engine.ComparisonExpr{
 			Field:    field,
-			Operator: rule.OpLTE,
+			Operator: engine.OpLTE,
 			Value:    strings.TrimPrefix(value, "<="),
 		}
 	}
 	if strings.HasPrefix(value, ">") {
-		return &rule.ComparisonExpr{
+		return &engine.ComparisonExpr{
 			Field:    field,
-			Operator: rule.OpGT,
+			Operator: engine.OpGT,
 			Value:    strings.TrimPrefix(value, ">"),
 		}
 	}
 	if strings.HasPrefix(value, "<") {
-		return &rule.ComparisonExpr{
+		return &engine.ComparisonExpr{
 			Field:    field,
-			Operator: rule.OpLT,
+			Operator: engine.OpLT,
 			Value:    strings.TrimPrefix(value, "<"),
 		}
 	}
 
-	return &rule.ComparisonExpr{
+	return &engine.ComparisonExpr{
 		Field:    field,
-		Operator: rule.OpEquals,
+		Operator: engine.OpEquals,
 		Value:    value,
 	}
 }
 
-func (m *UnifiedRuleManager) parseComplexCondition(field string, v map[string]interface{}) *rule.ComparisonExpr {
+func (m *UnifiedRuleManager) parseComplexCondition(field string, v map[string]interface{}) *engine.ComparisonExpr {
 	op, _ := v["operator"].(string)
 	val := v["value"]
 
 	switch strings.ToLower(op) {
 	case "contains":
-		return &rule.ComparisonExpr{Field: field, Operator: rule.OpContains, Value: val}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpContains, Value: val}
 	case "not_contains":
-		return &rule.ComparisonExpr{Field: field, Operator: rule.OpNotContains, Value: val}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpNotContains, Value: val}
 	case "regex":
 		pattern, _ := val.(string)
-		return &rule.ComparisonExpr{Field: field, Operator: rule.OpRegex, Value: pattern}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpRegex, Value: pattern}
 	case "not_regex":
 		pattern, _ := val.(string)
-		return &rule.ComparisonExpr{Field: field, Operator: rule.OpNotRegex, Value: pattern}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpNotRegex, Value: pattern}
 	case "in":
 		if list, ok := val.([]interface{}); ok {
-			return &rule.ComparisonExpr{Field: field, Operator: rule.OpIn, Value: list}
+			return &engine.ComparisonExpr{Field: field, Operator: engine.OpIn, Value: list}
 		}
 	case "not_in":
 		if list, ok := val.([]interface{}); ok {
-			return &rule.ComparisonExpr{Field: field, Operator: rule.OpNotIn, Value: list}
+			return &engine.ComparisonExpr{Field: field, Operator: engine.OpNotIn, Value: list}
 		}
 	case "exists":
-		return &rule.ComparisonExpr{Field: field, Operator: rule.OpExists}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpExists}
 	case "not_exists":
-		return &rule.ComparisonExpr{Field: field, Operator: rule.OpNotExists}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpNotExists}
 	case "gt", ">":
-		return &rule.ComparisonExpr{Field: field, Operator: rule.OpGT, Value: val}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpGT, Value: val}
 	case "gte", ">=":
-		return &rule.ComparisonExpr{Field: field, Operator: rule.OpGTE, Value: val}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpGTE, Value: val}
 	case "lt", "<":
-		return &rule.ComparisonExpr{Field: field, Operator: rule.OpLT, Value: val}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpLT, Value: val}
 	case "lte", "<=":
-		return &rule.ComparisonExpr{Field: field, Operator: rule.OpLTE, Value: val}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpLTE, Value: val}
 	default:
-		return &rule.ComparisonExpr{Field: field, Operator: rule.OpEquals, Value: val}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpEquals, Value: val}
 	}
 
 	return nil
 }
 
-func (m *UnifiedRuleManager) parseConditions(conds interface{}) []rule.ConditionExpr {
-	result := make([]rule.ConditionExpr, 0)
+func (m *UnifiedRuleManager) parseConditions(conds interface{}) []engine.ConditionExpr {
+	result := make([]engine.ConditionExpr, 0)
 
 	switch c := conds.(type) {
 	case []interface{}:
@@ -504,7 +504,7 @@ func (m *UnifiedRuleManager) parseConditions(conds interface{}) []rule.Condition
 	return result
 }
 
-func (m *UnifiedRuleManager) parseConditionString(cond string) []rule.ConditionExpr {
+func (m *UnifiedRuleManager) parseConditionString(cond string) []engine.ConditionExpr {
 	conditions, err := m.falcoParser.ParseCondition(cond)
 	if err != nil {
 		log.Printf("Warning: failed to parse condition string: %v", err)
@@ -601,7 +601,7 @@ func (m *UnifiedRuleManager) loadWhitelist(whitelist map[interface{}]interface{}
 	}
 }
 
-func (m *UnifiedRuleManager) generateID(name string, source rule.RuleSource) string {
+func (m *UnifiedRuleManager) generateID(name string, source engine.RuleSource) string {
 	return string(source) + "-" + strings.ToLower(strings.ReplaceAll(name, " ", "-"))
 }
 
@@ -609,7 +609,7 @@ func (m *UnifiedRuleManager) MatchEvent(event *EventJSON) []AlertEvent {
 	return m.bridge.MatchEvent(event)
 }
 
-func (m *UnifiedRuleManager) GetEngine() *rule.Engine {
+func (m *UnifiedRuleManager) GetEngine() *engine.Engine {
 	return m.engine
 }
 
@@ -617,11 +617,11 @@ func (m *UnifiedRuleManager) GetBridge() *RuleEngineBridge {
 	return m.bridge
 }
 
-func (m *UnifiedRuleManager) GetStats() *rule.EngineStats {
+func (m *UnifiedRuleManager) GetStats() *engine.EngineStats {
 	return m.engine.GetStats()
 }
 
-func (m *UnifiedRuleManager) GetRules() []*rule.UnifiedRule {
+func (m *UnifiedRuleManager) GetRules() []*engine.UnifiedRule {
 	return m.engine.GetRules()
 }
 

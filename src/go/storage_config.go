@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"gopkg.in/yaml.v2"
 )
@@ -138,11 +139,9 @@ func getEnvOrDefault(key, defaultValue string) string {
 
 func getEnvIntOrDefault(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
-		var intVal int
-		if _, err := filepath.Match(value, ""); err == false {
-			return defaultValue
+		if intVal, err := strconv.Atoi(value); err == nil {
+			return intVal
 		}
-		_ = intVal // 使用更简单的方式
 		return defaultValue
 	}
 	return defaultValue

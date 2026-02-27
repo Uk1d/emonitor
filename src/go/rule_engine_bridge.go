@@ -3,20 +3,20 @@ package main
 import (
 	"encoding/json"
 
-	rule "etracee/internal/core/rule"
+	"etracee/internal/engine"
 )
 
 type RuleEngineBridge struct {
-	adapter *rule.RuleAdapter
+	adapter *engine.RuleAdapter
 }
 
-func NewRuleEngineBridge(config *rule.EngineConfig) *RuleEngineBridge {
+func NewRuleEngineBridge(config *engine.EngineConfig) *RuleEngineBridge {
 	return &RuleEngineBridge{
-		adapter: rule.NewRuleAdapter(config),
+		adapter: engine.NewRuleAdapter(config),
 	}
 }
 
-func (b *RuleEngineBridge) LoadRulesFromYAML(data []byte, source rule.RuleSource) error {
+func (b *RuleEngineBridge) LoadRulesFromYAML(data []byte, source engine.RuleSource) error {
 	return b.adapter.LoadRulesFromYAML(data, source)
 }
 
@@ -121,15 +121,15 @@ func convertMetadata(m map[string]interface{}) map[string]string {
 	return result
 }
 
-func (b *RuleEngineBridge) GetEngine() *rule.Engine {
+func (b *RuleEngineBridge) GetEngine() *engine.Engine {
 	return b.adapter.GetEngine()
 }
 
-func (b *RuleEngineBridge) GetStats() *rule.EngineStats {
+func (b *RuleEngineBridge) GetStats() *engine.EngineStats {
 	return b.adapter.GetStats()
 }
 
-func (b *RuleEngineBridge) GetRules() []*rule.UnifiedRule {
+func (b *RuleEngineBridge) GetRules() []*engine.UnifiedRule {
 	return b.adapter.GetRules()
 }
 
