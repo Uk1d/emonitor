@@ -173,13 +173,23 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username, password })
                 });
-                const data = await resp.json();
+
+                // 尝试解析响应体，即使状态码不是 2xx
+                let data = {};
+                try {
+                    data = await resp.json();
+                } catch(parseErr) {
+                    // JSON 解析失败，可能是网络问题或服务器错误
+                    throw new Error('服务器响应异常');
+                }
+
                 if (data.success) {
                     localStorage.setItem('auth_token', data.token);
                     localStorage.setItem('auth_expires', data.expires);
                     if (remember) localStorage.setItem('remember_login', 'true');
                     window.location.href = '/';
                 } else {
+                    // 显示后端返回的错误消息
                     errorDiv.textContent = data.message || '登录失败';
                     errorDiv.classList.add('show');
                     document.querySelector('.login-container').style.animation = 'shake 0.3s';
@@ -188,7 +198,7 @@
                     }, 300);
                 }
             } catch(err) {
-                errorDiv.textContent = '网络错误，请稍后重试';
+                errorDiv.textContent = err.message || '网络错误，请稍后重试';
                 errorDiv.classList.add('show');
             }
             submitBtn.disabled = false;

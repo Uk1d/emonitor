@@ -167,18 +167,19 @@ func (s *WebServer) registerRoutes() {
 
 // buildHandler 构建处理器链
 func (s *WebServer) buildHandler() http.Handler {
-	var handler http.Handler = s.mux
+	// 构建基础处理器链：mux -> auth -> cors
+	var baseHandler http.Handler = s.mux
 
 	// 如果认证服务已启用，应用认证中间件
 	if s.authService != nil {
-		handler = s.authService.Middleware(handler)
+		baseHandler = s.authService.Middleware(baseHandler)
 	}
 
 	// 应用 CORS 中间件
-	handler = s.corsMiddleware.Wrap(handler)
+	baseHandler = s.corsMiddleware.Wrap(baseHandler)
 
-	// 应用路径规范化（注意：必须使用新的变量名避免递归）
-	finalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// 应用路径规范化（必须在最外层，且直接调用 baseHandler）
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		for strings.Contains(p, "//") {
 			p = strings.ReplaceAll(p, "//", "/")
@@ -187,17 +188,18 @@ func (s *WebServer) buildHandler() http.Handler {
 		if p == "." {
 			p = "/"
 		}
-		// 只有路径改变时才需要修改请求
+
+		// 如果路径被修改，创建新请求
 		if p != r.URL.Path {
 			r2 := r.Clone(r.Context())
 			r2.URL.Path = p
-			handler.ServeHTTP(w, r2)
+			baseHandler.ServeHTTP(w, r2)
 			return
 		}
-		handler.ServeHTTP(w, r)
-	})
 
-	return finalHandler
+		// 直接调用基础处理器链，避免闭包递归
+		baseHandler.ServeHTTP(w, r)
+	})
 }
 
 // SetAuthService 设置认证服务并重建处理器链
@@ -415,8 +417,13 @@ func (s *WebServer) wsReadPump(client *WSClient) {
 // HTTP handlers
 
 func (s *WebServer) handleLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	if s.authService == nil {
-		http.Error(w, `{"success": false, "message": "认证服务未启用，请配置 MySQL 连接"}`, http.StatusServiceUnavailable)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "认证服务未启用，请配置 MySQL 连接",
+		})
 		return
 	}
 	s.authService.HandleLogin(w, r)
@@ -563,10 +570,13 @@ func main() {
 
 	authService, authErr := auth.InitAuth(authCfg)
 	if authErr != nil {
-		log.Fatalf("[!] 认证服务初始化失败: %v", authErr)
+		log.Printf("[!] 认证服务初始化失败: %v", authErr)
+		log.Printf("[!] Web 服务将以无认证模式运行")
+		log.Printf("[!] 请检查 MySQL 连接配置: config/database.yaml")
+	} else {
+		log.Println("[+] 认证服务初始化成功")
+		log.Printf("[+] 管理员账户: %s (请及时修改密码)", authCfg.AdminUsername)
 	}
-	log.Println("[+] 认证服务初始化成功")
-	log.Printf("[+] 管理员账户: %s (请及时修改密码)", authCfg.AdminUsername)
 
 	// 创建 Web 服务
 	srv := NewWebServer(port, monitorURL)

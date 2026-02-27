@@ -30,6 +30,10 @@ type AlertAPI struct {
 	eventContext *EventContext
 	authService  *auth.AuthService
 
+	// 路由和中间件（用于重建处理器链）
+	mux          *http.ServeMux
+	corsMW       *middleware.CORSMiddleware
+
 	// WebSocket
 	wsUpgrader       websocket.Upgrader
 	wsClients        map[*WSClient]struct{}
@@ -70,6 +74,8 @@ func NewAlertAPI(alertManager *AlertManager, port int, storage Storage, eventCon
 	// 静态资源（需要认证）
 	mux.Handle("/", web.Handler())
 
+	api.mux = mux
+
 	api.allowedOrigins = config.AllowedOriginsFromEnv()
 	api.apiToken = config.APITokenFromEnv()
 	api.requireAuth = api.apiToken != ""
@@ -81,6 +87,7 @@ func NewAlertAPI(alertManager *AlertManager, port int, storage Storage, eventCon
 
 	mw := middleware.NewCORSMiddleware(api.allowedOrigins, api.apiToken)
 	mw.RequireAuth = api.requireAuth
+	api.corsMW = mw
 	api.wsUpgrader = websocket.Upgrader{CheckOrigin: mw.CheckOrigin}
 	if api.requireAuth {
 		api.wsUpgrader.Subprotocols = []string{api.apiToken, "Bearer " + api.apiToken}
@@ -101,14 +108,28 @@ func NewAlertAPI(alertManager *AlertManager, port int, storage Storage, eventCon
 		}
 	}
 
-	// 应用认证中间件
-	var handler http.Handler = mux
+	// 构建初始处理器链
+	handler := api.buildHandler()
+	api.server = &http.Server{Addr: addr, Handler: handler}
+
+	return api
+}
+
+// buildHandler 构建处理器链
+func (api *AlertAPI) buildHandler() http.Handler {
+	// 构建基础处理器链：mux -> auth -> cors
+	var baseHandler http.Handler = api.mux
+
+	// 如果认证服务已启用，应用认证中间件
 	if api.authService != nil {
-		handler = api.authService.Middleware(mux)
+		baseHandler = api.authService.Middleware(baseHandler)
 	}
 
-	base := mw.Wrap(handler)
-	normalizer := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// 应用 CORS 中间件
+	baseHandler = api.corsMW.Wrap(baseHandler)
+
+	// 应用路径规范化
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		for strings.Contains(p, "//") {
 			p = strings.ReplaceAll(p, "//", "/")
@@ -117,24 +138,36 @@ func NewAlertAPI(alertManager *AlertManager, port int, storage Storage, eventCon
 		if p == "." {
 			p = "/"
 		}
-		r2 := r.Clone(r.Context())
-		r2.URL.Path = p
-		base.ServeHTTP(w, r2)
-	})
-	api.server = &http.Server{Addr: addr, Handler: normalizer}
 
-	return api
+		if p != r.URL.Path {
+			r2 := r.Clone(r.Context())
+			r2.URL.Path = p
+			baseHandler.ServeHTTP(w, r2)
+			return
+		}
+
+		baseHandler.ServeHTTP(w, r)
+	})
 }
 
-// SetAuthService 设置认证服务
+// SetAuthService 设置认证服务并重建处理器链
 func (api *AlertAPI) SetAuthService(authService *auth.AuthService) {
 	api.authService = authService
+	// 重建处理器链以应用认证中间件
+	if api.server != nil {
+		api.server.Handler = api.buildHandler()
+	}
 }
 
 // handleLogin 处理登录请求
 func (api *AlertAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	if api.authService == nil {
-		http.Error(w, `{"success": false, "message": "认证服务未启用"}`, http.StatusServiceUnavailable)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "认证服务未启用，请配置 MySQL 连接",
+		})
 		return
 	}
 	api.authService.HandleLogin(w, r)

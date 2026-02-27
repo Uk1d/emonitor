@@ -642,15 +642,31 @@ func main() {
 	}
 
 	// 初始化认证服务（仅在非分离模式下）
-	// 注意：监控程序不需要 Web 认证服务，认证由独立 Web 服务处理
+	// 使用配置文件中的 Web 数据库配置
 	var authService *auth.AuthService
 	if !*monitorOnly {
-		authCfg := auth.GetAuthFromEnv()
+		// 从配置文件读取认证配置，而非环境变量
+		webDBCfg := appCfg.GetWebDBConfig()
+		authCfg := &auth.Config{
+			MySQLHost:     webDBCfg.Host,
+			MySQLPort:     webDBCfg.Port,
+			MySQLUser:     webDBCfg.User,
+			MySQLPassword: webDBCfg.Password,
+			MySQLDatabase: webDBCfg.Database,
+			AdminUsername: appCfg.Admin.Username,
+			AdminPassword: appCfg.Admin.Password,
+			JWTSecret:     appCfg.JWT.Secret,
+			TokenExpiry:   time.Duration(appCfg.JWT.ExpiryHours) * time.Hour,
+		}
+
+		log.Printf("[*] 认证服务配置: MySQL %s@%s:%d/%s",
+			authCfg.MySQLUser, authCfg.MySQLHost, authCfg.MySQLPort, authCfg.MySQLDatabase)
+
 		var authErr error
 		authService, authErr = auth.InitAuth(authCfg)
 		if authErr != nil {
-			log.Printf("[!] 认证服务初始化失败: %v (将禁用登录功能)", authErr)
-			log.Printf("[!] 请确保 MySQL 连接配置正确: MYSQL_WEB_HOST, MYSQL_WEB_USER, MYSQL_WEB_PASSWORD")
+			log.Printf("[!] 认证服务初始化失败: %v", authErr)
+			log.Printf("[!] 请检查 MySQL 连接配置: config/database.yaml")
 		} else {
 			log.Println("[+] 认证服务初始化成功 (数据库: etracee_web)")
 			log.Printf("[+] 默认管理员账户: %s", authCfg.AdminUsername)

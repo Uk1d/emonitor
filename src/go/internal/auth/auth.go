@@ -130,6 +130,7 @@ func InitAuth(cfg *Config) (*AuthService, error) {
 
 		// 测试连接
 		if err := db.Ping(); err != nil {
+			db.Close()
 			initErr = fmt.Errorf("MySQL连接测试失败: %w", err)
 			return
 		}
@@ -140,7 +141,8 @@ func InitAuth(cfg *Config) (*AuthService, error) {
 			jwtSecret = generateSecret()
 		}
 
-		authService = &AuthService{
+		// 创建临时服务对象进行初始化
+		svc := &AuthService{
 			db:            db,
 			sessions:      make(map[string]*Session),
 			jwtSecret:     jwtSecret,
@@ -150,18 +152,21 @@ func InitAuth(cfg *Config) (*AuthService, error) {
 		}
 
 		// 初始化数据库表
-		if err := authService.initTables(); err != nil {
+		if err := svc.initTables(); err != nil {
+			db.Close()
 			initErr = fmt.Errorf("初始化数据库表失败: %w", err)
 			return
 		}
 
 		// 初始化管理员账户
-		if err := authService.initAdminUser(); err != nil {
+		if err := svc.initAdminUser(); err != nil {
+			db.Close()
 			initErr = fmt.Errorf("初始化管理员账户失败: %w", err)
 			return
 		}
 
-		authService.initialized = true
+		svc.initialized = true
+		authService = svc
 		log.Println("[*] 认证服务初始化完成")
 	})
 
@@ -239,10 +244,11 @@ func (a *AuthService) initAdminUser() error {
 func (a *AuthService) Login(username, password string) (*LoginResponse, error) {
 	// 查询用户
 	var user User
+	var lastLoginNull sql.NullTime // 处理可能为 NULL 的 last_login 字段
 	err := a.db.QueryRow(
 		"SELECT id, username, password_hash, created_at, last_login FROM users WHERE username = ?",
 		username,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.CreatedAt, &user.LastLogin)
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.CreatedAt, &lastLoginNull)
 
 	if err == sql.ErrNoRows {
 		return &LoginResponse{
@@ -251,7 +257,13 @@ func (a *AuthService) Login(username, password string) (*LoginResponse, error) {
 		}, nil
 	}
 	if err != nil {
-		return nil, err
+		log.Printf("[!] 查询用户失败 (username=%s): %v", username, err)
+		return nil, fmt.Errorf("数据库查询失败: %w", err)
+	}
+
+	// 处理 NULL 值
+	if lastLoginNull.Valid {
+		user.LastLogin = lastLoginNull.Time
 	}
 
 	// 验证密码
@@ -334,24 +346,38 @@ func (a *AuthService) CleanExpiredSessions() {
 
 // HandleLogin 处理登录请求
 func (a *AuthService) HandleLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
 	if r.Method != http.MethodPost {
-		http.Error(w, "方法不允许", http.StatusMethodNotAllowed)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "方法不允许",
+		})
 		return
 	}
 
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "无效的请求", http.StatusBadRequest)
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "无效的请求",
+		})
 		return
 	}
 
 	resp, err := a.Login(req.Username, req.Password)
 	if err != nil {
-		http.Error(w, "服务器错误", http.StatusInternalServerError)
+		log.Printf("[!] 登录处理错误: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "服务器内部错误，请稍后重试",
+		})
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
