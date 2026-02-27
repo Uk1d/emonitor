@@ -529,14 +529,22 @@ func main() {
 
 	// 命令行参数解析
 	var (
-		configPath = flag.String("config", "config/enhanced_security_config.yaml", "安全规则配置文件路径")
-		dashboard  = flag.Bool("dashboard", false, "启用命令行Dashboard")
-		pidMin     = flag.Uint("pid-min", 0, "过滤PID最小值")
-		pidMax     = flag.Uint("pid-max", 0, "过滤PID最大值")
-		uidMin     = flag.Uint("uid-min", 0, "过滤UID最小值")
-		uidMax     = flag.Uint("uid-max", 0, "过滤UID最大值")
+		configPath    = flag.String("config", "config/enhanced_security_config.yaml", "安全规则配置文件路径")
+		dashboard     = flag.Bool("dashboard", false, "启用命令行Dashboard")
+		pidMin        = flag.Uint("pid-min", 0, "过滤PID最小值")
+		pidMax        = flag.Uint("pid-max", 0, "过滤PID最大值")
+		uidMin        = flag.Uint("uid-min", 0, "过滤UID最小值")
+		uidMax        = flag.Uint("uid-max", 0, "过滤UID最大值")
+		monitorOnly   = flag.Bool("monitor-only", false, "仅运行监控模式（无Web界面，用于与独立Web服务配合）")
+		webPort       = flag.Int("web-port", 8888, "Web服务端口（仅在非monitor-only模式下使用）")
+		wsPort        = flag.Int("ws-port", 8889, "WebSocket服务端口（供独立Web服务连接）")
 	)
 	flag.Parse()
+
+	// 检查是否以 root 权限运行
+	if os.Geteuid() != 0 {
+		log.Fatal("错误：监控程序需要 root 权限运行。请使用 sudo 或以 root 用户执行。")
+	}
 
 	// 移除内存限制
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -572,8 +580,22 @@ func main() {
 	}
 	alertManager := NewAlertManager(alertManagerConfig)
 
-	// 读取并初始化存储配置（Week 5）
-	storageCfg, _ := LoadStorageConfig("config/storage.yaml")
+	// 读取并初始化存储配置
+	// 优先级：环境变量 > 配置文件
+	storageCfg := GetStorageConfigFromEnv()
+	if storageCfg == nil {
+		// 尝试从配置文件加载
+		configPaths := []string{
+			"config/storage.yaml",
+			"/etc/etracee/storage.yaml",
+		}
+		for _, configPath := range configPaths {
+			if cfg, err := LoadStorageConfig(configPath); err == nil && cfg != nil {
+				storageCfg = cfg
+				break
+			}
+		}
+	}
 	var storage Storage
 	if storageCfg != nil {
 		st, err := NewStorageFromConfig(storageCfg)
@@ -582,7 +604,7 @@ func main() {
 		} else {
 			storage = st
 			alertManager.SetStorage(storage)
-			log.Printf("[+] 存储后端已初始化: %s -> %s", storageCfg.Backend, storageCfg.SQLite.Path)
+			log.Printf("[+] 存储后端已初始化: %s (数据库: %s)", storageCfg.Backend, storageCfg.MySQL.Database)
 		}
 	}
 
@@ -620,38 +642,60 @@ func main() {
 		log.Printf("[*] Webhook 通知未配置，跳过注册（设置 ETRACEE_WEBHOOK_URL 启用）")
 	}
 
-	// 初始化认证服务
-	authCfg := auth.GetAuthFromEnv()
-	authService, authErr := auth.InitAuth(authCfg)
-	if authErr != nil {
-		log.Printf("[!] 认证服务初始化失败: %v (将禁用登录功能)", authErr)
-	} else {
-		log.Println("[+] 认证服务初始化成功")
-	}
-
-	// 初始化告警管理API服务器（接入存储查询）
-	alertAPI := NewAlertAPI(alertManager, 8888, storage, eventContext)
-	if authService != nil {
-		alertAPI.SetAuthService(authService)
-	}
-	go func() {
-		log.Println("[+] 告警管理API服务器启动在端口 8888")
-		log.Println("  Web界面: http://localhost:8888")
-		log.Println("  API文档: http://localhost:8888/api/alerts")
-		if err := alertAPI.Start(); err != nil && err != http.ErrServerClosed {
-			log.Printf("告警API服务器错误: %v", err)
+	// 初始化认证服务（仅在非分离模式下）
+	// 注意：监控程序不需要 Web 认证服务，认证由独立 Web 服务处理
+	var authService *auth.AuthService
+	if !*monitorOnly {
+		authCfg := auth.GetAuthFromEnv()
+		var authErr error
+		authService, authErr = auth.InitAuth(authCfg)
+		if authErr != nil {
+			log.Printf("[!] 认证服务初始化失败: %v (将禁用登录功能)", authErr)
+			log.Printf("[!] 请确保 MySQL 连接配置正确: MYSQL_WEB_HOST, MYSQL_WEB_USER, MYSQL_WEB_PASSWORD")
+		} else {
+			log.Println("[+] 认证服务初始化成功 (数据库: etracee_web)")
+			log.Printf("[+] 默认管理员账户: %s", authCfg.AdminUsername)
 		}
-	}()
+	}
 
-	go func() {
-		t := time.NewTicker(5 * time.Second)
-		defer t.Stop()
-		for range t.C {
-			if alertAPI != nil {
-				if stats := alertAPI.computeAlertStats(); stats != nil {
-					alertAPI.broadcast(map[string]interface{}{"type": "stats", "ts": time.Now().Format(time.RFC3339), "data": stats})
+	// 初始化告警管理API服务器（仅在非分离模式下）
+	// 推荐：使用独立 Web 服务运行，监控程序以 monitor-only 模式运行
+	var alertAPI *AlertAPI
+	if !*monitorOnly {
+		alertAPI = NewAlertAPI(alertManager, *webPort, storage, eventContext)
+		if authService != nil {
+			alertAPI.SetAuthService(authService)
+		}
+		go func() {
+			log.Printf("[+] 告警管理API服务器启动在端口 %d", *webPort)
+			log.Printf("    Web界面: http://localhost:%d", *webPort)
+			log.Printf("    API文档: http://localhost:%d/api/alerts", *webPort)
+			if err := alertAPI.Start(); err != nil && err != http.ErrServerClosed {
+				log.Printf("告警API服务器错误: %v", err)
+			}
+		}()
+
+		go func() {
+			t := time.NewTicker(5 * time.Second)
+			defer t.Stop()
+			for range t.C {
+				if alertAPI != nil {
+					if stats := alertAPI.computeAlertStats(); stats != nil {
+						alertAPI.broadcast(map[string]interface{}{"type": "stats", "ts": time.Now().Format(time.RFC3339), "data": stats})
+					}
 				}
 			}
+		}()
+	}
+
+	// 启动 WebSocket 服务端（供独立 Web 服务连接）
+	// 这是分离架构的核心：监控程序通过此端口向独立 Web 服务推送数据
+	wsServer := NewMonitorWSServer(*wsPort, alertManager, storage, eventContext)
+	go func() {
+		log.Printf("[+] WebSocket 服务端启动在端口 %d (供独立 Web 服务连接)", *wsPort)
+		log.Printf("    独立 Web 服务连接地址: ws://localhost:%d/ws", *wsPort)
+		if err := wsServer.Start(); err != nil {
+			log.Printf("WebSocket 服务错误: %v", err)
 		}
 	}()
 
@@ -1363,6 +1407,10 @@ func main() {
 			if alertAPI != nil {
 				alertAPI.BroadcastEvent(event)
 			}
+			// 广播事件到独立 Web 服务
+			if wsServer != nil {
+				wsServer.BroadcastEvent(event)
+			}
 
 			// 应用增强安全规则引擎
 			alerts := ruleEngine.MatchRules(event)
@@ -1435,9 +1483,14 @@ func main() {
 				log.Printf("[!] 安全告警已处理: ID=%s, 规则=%s, 严重级别=%s, 状态=%s",
 					managedAlert.ID, managedAlert.RuleName, managedAlert.Severity, managedAlert.Status)
 
-				// WebSocket实时推送
+				// WebSocket实时推送（内嵌Web服务）
 				if alertAPI != nil {
 					alertAPI.BroadcastAlert(managedAlert)
+				}
+
+				// WebSocket 实时推送（独立 Web 服务）
+				if wsServer != nil {
+					wsServer.BroadcastAlert(managedAlert)
 				}
 			}
 

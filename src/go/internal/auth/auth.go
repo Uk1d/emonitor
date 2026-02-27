@@ -458,13 +458,14 @@ func (a *AuthService) Close() error {
 }
 
 // GetAuthFromEnv 从环境变量获取认证配置
+// 使用独立的 Web 数据库 (etracee_web) 存储用户和会话信息
 func GetAuthFromEnv() *Config {
 	return &Config{
-		MySQLHost:     getEnv("MYSQL_HOST", "localhost"),
+		MySQLHost:     getEnv("MYSQL_WEB_HOST", getEnv("MYSQL_HOST", "localhost")),
 		MySQLPort:     3306,
-		MySQLUser:     getEnv("MYSQL_USER", "root"),
-		MySQLPassword: getEnv("MYSQL_PASSWORD", ""),
-		MySQLDatabase: getEnv("MYSQL_DATABASE", "etracee"),
+		MySQLUser:     getEnv("MYSQL_WEB_USER", getEnv("MYSQL_USER", "root")),
+		MySQLPassword: getEnv("MYSQL_WEB_PASSWORD", getEnv("MYSQL_PASSWORD", "")),
+		MySQLDatabase: getEnv("MYSQL_WEB_DATABASE", "etracee_web"),
 		AdminUsername: getEnv("ADMIN_USERNAME", "admin"),
 		AdminPassword: getEnv("ADMIN_PASSWORD", "admin123"),
 		JWTSecret:     getEnv("JWT_SECRET", ""),
