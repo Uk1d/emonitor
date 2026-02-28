@@ -22,27 +22,27 @@ import (
 	"etracee/internal/dbconfig"
 	"etracee/internal/web"
 
-	"github.com/gorilla/websocket"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/gorilla/websocket"
 )
 
 // WebServer Web 服务结构
 type WebServer struct {
-	server       *http.Server
-	authService  *auth.AuthService
-	storage      WebStorage
-	mux          *http.ServeMux
+	server      *http.Server
+	authService *auth.AuthService
+	storage     WebStorage
+	mux         *http.ServeMux
 
 	// WebSocket 连接到监控程序
-	monitorConn      *websocket.Conn
-	monitorURL       string
-	reconnectDelay   time.Duration
+	monitorConn    *websocket.Conn
+	monitorURL     string
+	reconnectDelay time.Duration
 
 	// WebSocket 客户端（浏览器）
-	wsUpgrader       websocket.Upgrader
-	wsClients        map[*WSClient]struct{}
-	wsMutex          sync.Mutex
-	wsQueueSize      int
+	wsUpgrader  websocket.Upgrader
+	wsClients   map[*WSClient]struct{}
+	wsMutex     sync.Mutex
+	wsQueueSize int
 
 	// 事件缓存
 	eventMu          sync.RWMutex
@@ -159,7 +159,8 @@ func (s *WebServer) registerRoutes() {
 	s.mux.HandleFunc("/api/events", s.handleEvents)
 	s.mux.HandleFunc("/api/alerts", s.handleAlerts)
 	s.mux.HandleFunc("/api/stats", s.handleStats)
-	s.mux.HandleFunc("/api/ws", s.handleWebSocket)
+	s.mux.HandleFunc("/api/attack-chains/graph", s.handleAttackChainGraph)
+	s.mux.HandleFunc("/ws", s.handleWebSocket)
 
 	// 静态资源
 	s.mux.Handle("/", web.Handler())
@@ -527,6 +528,15 @@ func (s *WebServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	client := s.addWSClient(conn)
 	go s.wsReadPump(client)
+}
+
+func (s *WebServer) handleAttackChainGraph(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"nodes":  []interface{}{},
+		"links":  []interface{}{},
+		"chains": []interface{}{},
+	})
 }
 
 func main() {

@@ -132,11 +132,9 @@ func (m *CORSMiddleware) isOriginAllowed(origin string, r *http.Request) bool {
 }
 
 // isProtectedPath 检查路径是否为受保护的 API 路径
-// 受保护的路径包括：/ws、/api/* 等
+// 受保护的路径包括：/api/* 等
+// 注意：/ws 路径使用 JWT 认证系统，不在此处检查
 func (m *CORSMiddleware) isProtectedPath(path string) bool {
-	if path == "/ws" {
-		return true
-	}
 	if strings.HasPrefix(path, "/api/") || path == "/api" {
 		return true
 	}

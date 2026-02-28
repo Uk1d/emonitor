@@ -425,11 +425,12 @@ func (a *AuthService) HandleCheckAuth(w http.ResponseWriter, r *http.Request) {
 // Middleware 认证中间件
 func (a *AuthService) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 跳过登录相关路径
+		// 跳过登录相关路径和 WebSocket 路径
 		if r.URL.Path == "/api/login" ||
 			r.URL.Path == "/api/logout" ||
 			r.URL.Path == "/api/check-auth" ||
 			r.URL.Path == "/login" ||
+			r.URL.Path == "/ws" ||
 			strings.HasPrefix(r.URL.Path, "/static/") {
 			next.ServeHTTP(w, r)
 			return
