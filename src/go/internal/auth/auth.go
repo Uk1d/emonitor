@@ -287,10 +287,21 @@ func (a *AuthService) Login(username, password string) (*LoginResponse, error) {
 		ExpiresAt: expiresAt,
 	}
 
-	// 存储会话
+	// 存储会话到内存
 	a.sessionsMutex.Lock()
 	a.sessions[token] = session
 	a.sessionsMutex.Unlock()
+
+	// 持久化会话到数据库
+	if a.db != nil {
+		_, err := a.db.Exec(
+			"INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE expires_at = VALUES(expires_at)",
+			token, user.ID, session.CreatedAt, expiresAt,
+		)
+		if err != nil {
+			log.Printf("[!] 保存会话到数据库失败: %v", err)
+		}
+	}
 
 	// 更新最后登录时间
 	go a.db.Exec("UPDATE users SET last_login = NOW() WHERE id = ?", user.ID)
@@ -308,27 +319,67 @@ func (a *AuthService) Logout(token string) error {
 	a.sessionsMutex.Lock()
 	delete(a.sessions, token)
 	a.sessionsMutex.Unlock()
+
+	// 从数据库删除会话
+	if a.db != nil && token != "" {
+		go a.db.Exec("DELETE FROM sessions WHERE token = ?", token)
+	}
+
 	return nil
 }
 
 // ValidateToken 验证令牌
 func (a *AuthService) ValidateToken(token string) (*Session, error) {
+	// 首先检查内存中的会话
 	a.sessionsMutex.RLock()
 	session, exists := a.sessions[token]
 	a.sessionsMutex.RUnlock()
 
-	if !exists {
-		return nil, errors.New("无效的令牌")
+	if exists {
+		if time.Now().After(session.ExpiresAt) {
+			a.sessionsMutex.Lock()
+			delete(a.sessions, token)
+			a.sessionsMutex.Unlock()
+			return nil, errors.New("令牌已过期")
+		}
+		return session, nil
 	}
 
-	if time.Now().After(session.ExpiresAt) {
-		a.sessionsMutex.Lock()
-		delete(a.sessions, token)
-		a.sessionsMutex.Unlock()
-		return nil, errors.New("令牌已过期")
+	// 内存中没有，从数据库加载
+	if a.db != nil {
+		var dbSession Session
+		var username string
+		var userID int
+		var createdAt, expiresAt time.Time
+
+		err := a.db.QueryRow(
+			"SELECT s.token, s.user_id, u.username, s.created_at, s.expires_at FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ?",
+			token,
+		).Scan(&dbSession.Token, &userID, &username, &createdAt, &expiresAt)
+
+		if err == nil {
+			dbSession.UserID = userID
+			dbSession.Username = username
+			dbSession.CreatedAt = createdAt
+			dbSession.ExpiresAt = expiresAt
+
+			// 检查是否过期
+			if time.Now().After(dbSession.ExpiresAt) {
+				// 删除过期会话
+				go a.db.Exec("DELETE FROM sessions WHERE token = ?", token)
+				return nil, errors.New("令牌已过期")
+			}
+
+			// 缓存到内存
+			a.sessionsMutex.Lock()
+			a.sessions[token] = &dbSession
+			a.sessionsMutex.Unlock()
+
+			return &dbSession, nil
+		}
 	}
 
-	return session, nil
+	return nil, errors.New("无效的令牌")
 }
 
 // CleanExpiredSessions 清理过期会话
