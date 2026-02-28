@@ -6,7 +6,7 @@ monitor_database:
   host: localhost
   port: 3306
   user: root
-  password: "your_password"          # 请修改为实际密码
+  password: "Chuhefu*kdang5"          # 请修改为实际密码
   database: etracee_events           # 监控程序数据库名
   max_open_conns: 50
   max_idle_conns: 10
@@ -17,7 +17,7 @@ web_database:
   host: localhost
   port: 3306
   user: root
-  password: "your_password"          # 请修改为实际密码
+  password: "Chuhefu*kdang5"          # 请修改为实际密码
   database: etracee_web              # Web 服务数据库名
   max_open_conns: 10
   max_idle_conns: 5
