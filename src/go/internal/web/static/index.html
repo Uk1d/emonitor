@@ -430,6 +430,31 @@
             els.eventSearch.oninput = () => renderEvents();
         }
 
+        // 监控程序活跃状态追踪
+        let lastDataTime = 0;
+        let monitorCheckInterval = null;
+        const MONITOR_TIMEOUT = 10000; // 10秒无数据认为监控程序未运行
+
+        // 更新监控程序状态显示
+        function updateMonitorStatus() {
+            const now = Date.now();
+            const timeSinceLastData = now - lastDataTime;
+            
+            if (timeSinceLastData > MONITOR_TIMEOUT) {
+                // 超过10秒无数据，监控程序可能未运行
+                if (state.connected) {
+                    els.wsDot.className = 'dot';
+                    els.wsText.textContent = '监控未运行';
+                }
+            } else {
+                // 近期有数据，监控程序正在运行
+                if (state.connected) {
+                    els.wsDot.className = 'dot ok';
+                    els.wsText.textContent = '监控运行中';
+                }
+            }
+        }
+
         // 建立 WebSocket 连接
         function connect() {
             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -438,21 +463,38 @@
 
             state.ws.onopen = () => {
                 state.connected = true;
-                els.wsDot.className = 'dot ok';
-                els.wsText.textContent = '已连接';
+                els.wsDot.className = 'dot';
+                els.wsText.textContent = '已连接(等待监控)';
+                
+                // 启动监控状态检查
+                if (monitorCheckInterval) clearInterval(monitorCheckInterval);
+                monitorCheckInterval = setInterval(updateMonitorStatus, 3000);
             };
 
             state.ws.onmessage = (e) => {
                 try {
                     const msg = JSON.parse(e.data);
                     handleMessage(msg);
+                    
+                    // 收到事件或告警数据，更新监控活跃时间
+                    if (msg.type === 'event' || msg.type === 'alert') {
+                        lastDataTime = Date.now();
+                        if (state.connected) {
+                            els.wsDot.className = 'dot ok';
+                            els.wsText.textContent = '监控运行中';
+                        }
+                    }
                 } catch(err) {}
             };
 
             state.ws.onclose = () => {
                 state.connected = false;
                 els.wsDot.className = 'dot err';
-                els.wsText.textContent = '已断开';
+                els.wsText.textContent = '连接断开';
+                if (monitorCheckInterval) {
+                    clearInterval(monitorCheckInterval);
+                    monitorCheckInterval = null;
+                }
                 setTimeout(connect, 3000);
             };
 
@@ -499,7 +541,24 @@
                 buffer.stats = null;
             }
             if (buffer.alerts.length > 0) {
-                state.alerts = [...buffer.alerts.reverse(), ...state.alerts].slice(0, MAX_ALERTS);
+                // 告警去重：相同ID的告警只保留最新的状态
+                const alertMap = new Map();
+                // 先添加现有告警
+                for (const a of state.alerts) {
+                    const id = a.ID || a.id;
+                    if (id) alertMap.set(id, a);
+                }
+                // 再用新告警覆盖（保留最新状态）
+                for (const a of buffer.alerts.reverse()) {
+                    const id = a.ID || a.id;
+                    if (id) alertMap.set(id, a);
+                }
+                // 转换为数组并按时间排序（最新的在前）
+                state.alerts = Array.from(alertMap.values()).sort((a, b) => {
+                    const tA = new Date(a.CreatedAt || a.created_at || a.Timestamp).getTime();
+                    const tB = new Date(b.CreatedAt || b.created_at || b.Timestamp).getTime();
+                    return tB - tA;
+                }).slice(0, MAX_ALERTS);
                 buffer.alerts = [];
                 renderAlerts();
             }

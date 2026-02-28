@@ -31,8 +31,8 @@ type AlertAPI struct {
 	authService  *auth.AuthService
 
 	// 路由和中间件（用于重建处理器链）
-	mux          *http.ServeMux
-	corsMW       *middleware.CORSMiddleware
+	mux    *http.ServeMux
+	corsMW *middleware.CORSMiddleware
 
 	// WebSocket
 	wsUpgrader       websocket.Upgrader
@@ -700,10 +700,14 @@ func (api *AlertAPI) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	totalAll, windowTotal := api.getEventTotals()
 	if api.storage != nil {
-		if alerts, _, err := api.storage.QueryAlerts(map[string]interface{}{"status": string(AlertStatusNew)}, 1, 10); err == nil {
-			for _, a := range alerts {
-				api.ensureAlertTimes(a)
-				api.enqueueNonBlocking(client, mustJSON(map[string]interface{}{"type": "alert", "ts": time.Now().Format(time.RFC3339), "data": a}))
+		// 推送所有活跃状态的告警（new, acknowledged, in_progress）
+		activeStatuses := []string{string(AlertStatusNew), string(AlertStatusAcknowledged), string(AlertStatusInProgress)}
+		for _, status := range activeStatuses {
+			if alerts, _, err := api.storage.QueryAlerts(map[string]interface{}{"status": status}, 1, 100); err == nil {
+				for _, a := range alerts {
+					api.ensureAlertTimes(a)
+					api.enqueueNonBlocking(client, mustJSON(map[string]interface{}{"type": "alert", "ts": time.Now().Format(time.RFC3339), "data": a}))
+				}
 			}
 		}
 		events, _, _ := api.storage.QueryEvents(map[string]interface{}{}, 1, 200)
@@ -716,9 +720,13 @@ func (api *AlertAPI) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			"window_limit": api.eventWindowLimit,
 		}))
 	} else {
-		for _, a := range api.alertManager.GetActiveAlerts(map[string]interface{}{}) {
-			api.ensureAlertTimes(a)
-			api.enqueueNonBlocking(client, mustJSON(map[string]interface{}{"type": "alert", "ts": time.Now().Format(time.RFC3339), "data": a}))
+		// 无存储时，推送内存中所有活跃告警
+		activeStatuses := []AlertStatus{AlertStatusNew, AlertStatusAcknowledged, AlertStatusInProgress}
+		for _, status := range activeStatuses {
+			for _, a := range api.alertManager.GetActiveAlerts(map[string]interface{}{"status": string(status)}) {
+				api.ensureAlertTimes(a)
+				api.enqueueNonBlocking(client, mustJSON(map[string]interface{}{"type": "alert", "ts": time.Now().Format(time.RFC3339), "data": a}))
+			}
 		}
 		events := api.getEventSnapshot(200)
 		api.enqueueNonBlocking(client, mustJSON(map[string]interface{}{
