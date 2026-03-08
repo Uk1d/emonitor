@@ -18,9 +18,9 @@ from flask_cors import CORS
 from ai_detector import AIDetector, AIDetectorConfig, anomaly_to_dict
 from report_generator import ReportGenerator, ReportGeneratorConfig
 
-
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+# 限制 CORS 来源以避免频繁的外部访问
+CORS(app, resources={r"/*": {"origins": ["http://localhost:8888", "http://127.0.0.1:8888"]}})
 
 # 全局检测器和生成器实例
 ai_detector: Optional[AIDetector] = None
@@ -56,7 +56,7 @@ def detect_anomaly():
         "event_type": "execve",
         "timestamp": "2024-03-08T10:30:00",
         "uid": 1000,
-        "gid": 1000,
+        "gid": 0,
         "filename": "/bin/ls",
         "dst_addr": {"ip": "192.168.1.1", "port": 8080}
     }
@@ -253,12 +253,6 @@ def receive_events():
         if 'events' in data:
             new_events = data['events']
             events_buffer.extend(new_events)
-            # 对每个事件执行 AI 检测
-            if ai_detector:
-                for event in new_events:
-                    anomaly = ai_detector.process_event(event)
-                    if anomaly:
-                        _add_alert_from_anomaly(anomaly)
 
         # 处理告警
         if 'alerts' in data:
@@ -306,6 +300,7 @@ def _add_alert_from_anomaly(anomaly):
         'category': anomaly.category,
         'timestamp': anomaly.detected_at.isoformat(),
         'pid': anomaly.pid,
+        'process_name': anomaly.process_name,
         'status': 'active'
     }
     alerts_buffer.append(alert)
@@ -350,4 +345,5 @@ if __name__ == '__main__':
     port = int(os.environ.get('PYTHON_SERVICE_PORT', 9900))
 
     print(f"[*] Python 服务启动在端口 {port}")
-    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+    # 只监听本地地址，避免外部访问
+    app.run(host='127.0.0.1', port=port, debug=False, threaded=True)

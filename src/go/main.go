@@ -1483,46 +1483,6 @@ func main() {
 				eventContext.DetectAttackChain(event, alertEvent)
 			}
 
-			// AI 异常检测 - 通过 Python 服务
-			go func(evt *EventJSON) {
-				if pythonClient.HealthCheck() {
-					result, err := pythonClient.DetectEvent(evt)
-					if err != nil {
-						log.Printf("[!] AI 检测失败: %v", err)
-						return
-					}
-
-					// 检查是否检测到异常
-					if result != nil && (*result)["anomaly"] != nil {
-						anomalyMap := (*result)["anomaly"].(map[string]interface{})
-						severity, _ := anomalyMap["severity"].(string)
-						description, _ := anomalyMap["description"].(string)
-						category, _ := anomalyMap["category"].(string)
-
-						aiAlert := &AlertEvent{
-							RuleName:    "AI异常检测",
-							Description: description,
-							Severity:    severity,
-							Category:    category,
-							Timestamp:   time.Now(),
-						}
-
-						log.Printf("[AI] 检测到异常: Type=%s, PID=%d, Severity=%s",
-							anomalyMap["type"], evt.PID, severity)
-
-						// 处理 AI 告警
-						managedAlert, err := alertManager.ProcessAlert(*aiAlert)
-						if err != nil {
-							log.Printf("AI告警处理失败: %v", err)
-						} else {
-							log.Printf("[AI] AI告警已处理: ID=%s", managedAlert.ID)
-							// 检测攻击链
-							eventContext.DetectAttackChain(evt, aiAlert)
-						}
-					}
-				}
-			}(event)
-
 			// 无告警事件：如果存在相关攻击链则更新（不新建），以避免评分停滞
 			if len(alerts) == 0 {
 				eventContext.DetectAttackChain(event, nil)

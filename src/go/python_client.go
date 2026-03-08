@@ -18,8 +18,12 @@ type PythonServiceClient struct {
 
 // NewPythonServiceClient 创建 Python 服务客户端
 func NewPythonServiceClient(host string, port int) *PythonServiceClient {
+	baseURL := "http://127.0.0.1:" + fmt.Sprintf("%d", port)
+	if host != "" {
+		baseURL = fmt.Sprintf("http://%s:%d", host, port)
+	}
 	return &PythonServiceClient{
-		baseURL: fmt.Sprintf("http://%s:%d", host, port),
+		baseURL:    baseURL,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
