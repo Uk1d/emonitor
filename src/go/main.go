@@ -564,6 +564,20 @@ func main() {
 	// 创建事件上下文管理器
 	eventContext := NewEventContext(nil) // 使用默认配置
 
+	// 创建 AI 异常检测器
+	aiDetector := NewAIDetector(nil)
+	log.Println("[+] AI 异常检测器已初始化")
+
+	// 启动基线更新任务
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			aiDetector.UpdateBaselines()
+			aiDetector.ClearOldStatistics()
+		}
+	}()
+
 	// 创建告警管理器
 	alertManagerConfig := &AlertManagerConfig{
 		MaxActiveAlerts:      10000,
@@ -677,7 +691,7 @@ func main() {
 	// 推荐：使用独立 Web 服务运行，监控程序以 monitor-only 模式运行
 	var alertAPI *AlertAPI
 	if !*monitorOnly {
-		alertAPI = NewAlertAPI(alertManager, *webPort, storage, eventContext)
+		alertAPI = NewAlertAPI(alertManager, *webPort, storage, eventContext, aiDetector)
 		if authService != nil {
 			alertAPI.SetAuthService(authService)
 		}
@@ -1456,6 +1470,33 @@ func main() {
 
 				// 检测攻击链
 				eventContext.DetectAttackChain(event, alertEvent)
+			}
+
+			// AI 异常检测
+			aiAnomaly := aiDetector.ProcessEvent(event)
+			if aiAnomaly != nil {
+				// 将 AI 检测到的异常转换为告警
+				aiAlert := &AlertEvent{
+					RuleName:    "AI异常检测",
+					Description: aiAnomaly.Description,
+					Severity:    aiAnomaly.Severity,
+					Category:    aiAnomaly.Category,
+					Timestamp:   time.Now(),
+				}
+
+				// 记录 AI 检测到的异常
+				log.Printf("[AI] 检测到异常: Type=%s, Score=%.2f, PID=%d, Severity=%s",
+					aiAnomaly.Type, aiAnomaly.Confidence, event.PID, aiAnomaly.Severity)
+
+				// 处理 AI 告警
+				managedAlert, err := alertManager.ProcessAlert(*aiAlert)
+				if err != nil {
+					log.Printf("AI告警处理失败: %v", err)
+				} else {
+					log.Printf("[AI] AI告警已处理: ID=%s", managedAlert.ID)
+					// 检测攻击链
+					eventContext.DetectAttackChain(event, aiAlert)
+				}
 			}
 
 			// 无告警事件：如果存在相关攻击链则更新（不新建），以避免评分停滞

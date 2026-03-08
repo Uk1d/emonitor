@@ -188,6 +188,8 @@
             <div class="tab active" data-tab="alerts">告警列表</div>
             <div class="tab" data-tab="events">事件流</div>
             <div class="tab" data-tab="attack-graph">攻击链图谱</div>
+            <div class="tab" data-tab="ai-detection">AI 检测</div>
+            <div class="tab" data-tab="reports">报告导出</div>
         </div>
 
         <!-- 告警列表面板 -->
@@ -239,6 +241,69 @@
             </div>
             <div class="graph-container">
                 <svg id="attack-graph" class="graph-svg"></svg>
+            </div>
+        </div>
+
+        <!-- AI 检测面板 -->
+        <div id="ai-detection-panel" class="panel" style="display:none;">
+            <div class="panel-header">
+                <div class="panel-title">AI 异常检测</div>
+                <div class="filter-bar">
+                    <select id="anomaly-type-filter" class="filter-input">
+                        <option value="">全部类型</option>
+                        <option value="process_behavior">进程行为</option>
+                        <option value="network_activity">网络活动</option>
+                        <option value="file_activity">文件活动</option>
+                        <option value="privilege_escalation">权限提升</option>
+                    </select>
+                    <select id="anomaly-severity-filter" class="filter-input">
+                        <option value="">全部级别</option>
+                        <option value="critical">严重</option>
+                        <option value="high">高危</option>
+                        <option value="medium">中危</option>
+                        <option value="low">低危</option>
+                    </select>
+                </div>
+            </div>
+            <div class="panel-body no-scroll">
+                <table class="table">
+                    <thead>
+                        <tr><th>检测时间</th><th>异常类型</th><th>严重级别</th><th>进程</th><th>置信度</th></tr>
+                    </thead>
+                    <tbody id="anomalies-tbody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 报告导出面板 -->
+        <div id="reports-panel" class="panel" style="display:none;">
+            <div class="panel-header">
+                <div class="panel-title">报告导出</div>
+            </div>
+            <div class="panel-body no-scroll" style="padding: 20px;">
+                <div class="stats-grid" style="margin-bottom: 20px;">
+                    <div class="stat-card" onclick="generateReport('json')" style="cursor: pointer;">
+                        <div class="label">JSON 报告</div>
+                        <div class="value">导出</div>
+                    </div>
+                    <div class="stat-card" onclick="generateReport('html')" style="cursor: pointer;">
+                        <div class="label">HTML 报告</div>
+                        <div class="value">导出</div>
+                    </div>
+                    <div class="stat-card" onclick="generateReport('csv')" style="cursor: pointer;">
+                        <div class="label">CSV 报告</div>
+                        <div class="value">导出</div>
+                    </div>
+                </div>
+                <div style="margin-top: 20px;">
+                    <h3>报告配置</h3>
+                    <div style="margin-top: 15px;">
+                        <label><input type="checkbox" id="include-events" checked> 包含事件数据</label><br>
+                        <label><input type="checkbox" id="include-alerts" checked> 包含告警数据</label><br>
+                        <label><input type="checkbox" id="include-chains" checked> 包含攻击链数据</label><br>
+                        <label><input type="checkbox" id="include-ai" checked> 包含 AI 检测数据</label>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -305,6 +370,7 @@
         let state = {
             alerts: [],                 // 告警列表
             events: [],                 // 事件列表
+            anomalies: [],              // AI 异常列表
             stats: { total: 0, active: 0, resolved: 0, eps: 0 },  // 统计数据
             eventCount: 0,              // 事件计数
             lastEventTime: Date.now(),  // 最后事件时间
@@ -419,7 +485,10 @@
                     document.getElementById('alerts-panel').style.display = name === 'alerts' ? 'block' : 'none';
                     document.getElementById('events-panel').style.display = name === 'events' ? 'block' : 'none';
                     document.getElementById('attack-graph-panel').style.display = name === 'attack-graph' ? 'block' : 'none';
+                    document.getElementById('ai-detection-panel').style.display = name === 'ai-detection' ? 'block' : 'none';
+                    document.getElementById('reports-panel').style.display = name === 'reports' ? 'block' : 'none';
                     if (name === 'attack-graph') fetchAttackGraph();
+                    if (name === 'ai-detection') fetchAnomalies();
                 };
             });
         }
@@ -428,6 +497,8 @@
         function setupFilters() {
             els.severityFilter.onchange = () => renderAlerts();
             els.eventSearch.oninput = () => renderEvents();
+            document.getElementById('anomaly-type-filter').onchange = () => renderAnomalies();
+            document.getElementById('anomaly-severity-filter').onchange = () => renderAnomalies();
         }
 
         // 监控程序活跃状态追踪
@@ -761,6 +832,93 @@
                 node.attr('cx', d => d.x).attr('cy', d => d.y);
                 label.attr('x', d => d.x).attr('y', d => d.y);
             });
+        }
+
+        // 获取 AI 异常列表
+        async function fetchAnomalies() {
+            try {
+                const resp = await fetch('/api/reports/anomalies');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                state.anomalies = data.anomalies || [];
+                renderAnomalies();
+            } catch(e) {
+                console.error('获取异常列表失败:', e);
+            }
+        }
+
+        // 渲染 AI 异常列表
+        function renderAnomalies() {
+            const typeFilter = document.getElementById('anomaly-type-filter').value;
+            const severityFilter = document.getElementById('anomaly-severity-filter').value;
+
+            const filtered = state.anomalies.filter(function(a) {
+                if (typeFilter && a.type !== typeFilter) return false;
+                if (severityFilter && a.severity !== severityFilter) return false;
+                return true;
+            });
+
+            const tbody = document.getElementById('anomalies-tbody');
+            if (!tbody) return;
+
+            tbody.innerHTML = filtered.slice(0, 50).map(function(a) {
+                const typeText = {
+                    'process_behavior': '进程行为',
+                    'network_activity': '网络活动',
+                    'file_activity': '文件活动',
+                    'privilege_escalation': '权限提升'
+                }[a.type] || a.type;
+                return '<tr>' +
+                    '<td>' + formatTime(a.detected_at) + '</td>' +
+                    '<td>' + typeText + '</td>' +
+                    '<td><span class="badge ' + a.severity + '">' + a.severity + '</span></td>' +
+                    '<td>' + (a.process_name || '-') + ' (PID: ' + a.pid + ')</td>' +
+                    '<td>' + (a.confidence * 100).toFixed(1) + '%</td></tr>';
+            }).join('');
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无异常数据</td></tr>';
+            }
+        }
+
+        // 生成报告
+        async function generateReport(format) {
+            const includeEvents = document.getElementById('include-events').checked;
+            const includeAlerts = document.getElementById('include-alerts').checked;
+            const includeChains = document.getElementById('include-chains').checked;
+            const includeAI = document.getElementById('include-ai').checked;
+
+            try {
+                // 显示加载提示
+                const btn = event.currentTarget;
+                const originalText = btn.textContent;
+                btn.textContent = '生成中...';
+                btn.disabled = true;
+
+                const resp = await fetch('/api/reports/generate?format=' + format);
+                if (!resp.ok) {
+                    throw new Error('生成报告失败');
+                }
+
+                // 创建 Blob 并下载
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'security_report_' + new Date().toISOString().slice(0,10) + '.' + format;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+                // 恢复按钮
+                btn.textContent = originalText;
+                btn.disabled = false;
+
+            } catch(e) {
+                console.error('生成报告失败:', e);
+                alert('生成报告失败: ' + e.message);
+            }
         }
 
         // 启动应用
