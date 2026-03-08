@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"etracee/internal/auth"
-	"etracee/internal/common/config"
 	"etracee/internal/dbconfig"
 	"flag"
 	"fmt"
@@ -740,49 +739,78 @@ func main() {
 	}()
 
 	// 加载安全配置到增强规则引擎
-	if err := loadEnhancedSecurityConfig(*configPath, ruleEngine); err != nil {
-		log.Printf("Warning: Failed to load enhanced security config: %v", err)
-		fallbackCandidates := make([]string, 0, 3)
-		if *configPath != "" {
-			if dir := filepath.Dir(*configPath); dir != "" && dir != "." {
-				fallbackCandidates = append(fallbackCandidates, filepath.Join(dir, "security_rules.yaml"))
+	// 首先尝试从多个位置查找配置文件
+	configCandidates := []string{
+		*configPath, // 用户指定的路径（可能是相对或绝对路径）
+	}
+
+	// 如果用户指定的路径是相对路径，添加绝对路径候选
+	if !filepath.IsAbs(*configPath) {
+		// 尝试当前工作目录
+		if absPath, err := filepath.Abs(*configPath); err == nil {
+			configCandidates = append(configCandidates, absPath)
+		}
+
+		// 尝试可执行文件所在目录的 config 子目录
+		var exe string
+		if e, err := os.Executable(); err == nil {
+			exe = e
+			exeDir := filepath.Dir(exe)
+			absPath := filepath.Join(exeDir, *configPath)
+			configCandidates = append(configCandidates, absPath)
+		}
+
+		// 尝试常见配置目录
+		commonPaths := []string{
+			"config/enhanced_security_config.yaml",
+			"/workspace/config/enhanced_security_config.yaml",
+		}
+		if exe != "" {
+			commonPaths = append(commonPaths, filepath.Join(filepath.Dir(exe), "config", "enhanced_security_config.yaml"))
+		}
+		for _, p := range commonPaths {
+			if absPath, err := filepath.Abs(p); err == nil {
+				configCandidates = append(configCandidates, absPath)
 			}
 		}
-		fallbackCandidates = append(fallbackCandidates, "config/security_rules.yaml")
-		if exe, exeErr := os.Executable(); exeErr == nil {
-			fallbackCandidates = append(fallbackCandidates, filepath.Join(filepath.Dir(exe), "config", "security_rules.yaml"))
+	}
+
+	// 尝试加载配置
+	var configLoaded bool
+	for _, candidate := range configCandidates {
+		if _, err := os.Stat(candidate); err != nil {
+			continue
 		}
-		loadedFallback := false
-		for _, fallbackPath := range fallbackCandidates {
-			if fallbackPath == "" || fallbackPath == *configPath {
-				continue
-			}
-			if _, statErr := os.Stat(fallbackPath); statErr != nil {
-				continue
-			}
-			if err := loadEnhancedSecurityConfig(fallbackPath, ruleEngine); err == nil {
-				log.Printf("[+] 已自动回退至安全规则配置: %s", fallbackPath)
-				loadedFallback = true
-				break
-			} else {
-				log.Printf("Warning: Failed to load fallback security config: %v", err)
-			}
+		if err := loadEnhancedSecurityConfig(candidate, ruleEngine); err == nil {
+			log.Printf("[+] 成功加载安全规则配置: %s", candidate)
+			configLoaded = true
+			break
 		}
-		if !loadedFallback {
-			ruleEngine.GlobalConfig = EnhancedGlobalConfig{
-				EnableFileEvents:       Boolish(config.BoolFromEnv("ETRACEE_ENABLE_FILE", true)),
-				EnableNetworkEvents:    Boolish(config.BoolFromEnv("ETRACEE_ENABLE_NETWORK", true)),
-				EnableProcessEvents:    Boolish(config.BoolFromEnv("ETRACEE_ENABLE_PROCESS", true)),
-				EnablePermissionEvents: Boolish(config.BoolFromEnv("ETRACEE_ENABLE_PERMISSION", true)),
-				EnableMemoryEvents:     Boolish(config.BoolFromEnv("ETRACEE_ENABLE_MEMORY", true)),
-				MinUIDFilter:           config.Uint32FromEnv("ETRACEE_UID_MIN", 0),
-				MaxUIDFilter:           config.Uint32FromEnv("ETRACEE_UID_MAX", 65535),
-				MaxEventsPerSecond:     config.IntFromEnv("ETRACEE_MAX_EPS", 10000),
-				AlertThrottleSeconds:   config.IntFromEnv("ETRACEE_ALERT_THROTTLE", 60),
-				MaxAlertHistory:        config.IntFromEnv("ETRACEE_MAX_ALERT_HISTORY", 1000),
-				EnableRuleStats:        Boolish(config.BoolFromEnv("ETRACEE_ENABLE_RULE_STATS", true)),
-				LogLevel:               config.StringFromEnv("ETRACEE_LOG_LEVEL", "info"),
-			}
+	}
+
+
+	if !configLoaded {
+		log.Println("[!] 警告: 未能加载任何安全规则配置文件，将使用默认配置但不包含检测规则")
+		log.Println("[!] 尝试的配置路径:")
+		for _, c := range configCandidates {
+			log.Printf("    - %s", c)
+		}
+
+		// 设置默认全局配置
+		ruleEngine.GlobalConfig = EnhancedGlobalConfig{
+			EnableFileEvents:       Boolish(true),
+			EnableNetworkEvents:    Boolish(true),
+			EnableProcessEvents:    Boolish(true),
+			EnablePermissionEvents: Boolish(true),
+			EnableMemoryEvents:     Boolish(true),
+			MinUIDFilter:           0,
+			MaxUIDFilter:           65535,
+			MaxEventsPerSecond:     10000,
+			RingBufferSize:         262144,
+			AlertThrottleSeconds:   60,
+			MaxAlertHistory:        1000,
+			EnableRuleStats:        Boolish(true),
+			LogLevel:               "info",
 		}
 	}
 	if os.Geteuid() == 0 && ruleEngine.GlobalConfig.MinUIDFilter > 0 {
