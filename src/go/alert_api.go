@@ -522,79 +522,23 @@ func (api *AlertAPI) handleAlertStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 仅使用存储进行统计，避免与内存统计混用造成不一致
-	var stats AlertStats
-	if api.storage != nil {
-		sinceStr := api.startTime.Format(time.RFC3339)
-		// 活跃告警：new、acknowledged、in_progress
-		activeStatuses := []string{string(AlertStatusNew), string(AlertStatusAcknowledged), string(AlertStatusInProgress)}
-		activeTotal := 0
-		for _, st := range activeStatuses {
-			_, cnt, err := api.storage.QueryAlerts(map[string]interface{}{"status": st, "since": sinceStr}, 1, 1)
-			if err != nil {
-				log.Printf("统计活跃告警失败(status=%s): %v", st, err)
-				continue
-			}
-			activeTotal += cnt
-		}
-		stats.ActiveAlerts = uint64(activeTotal)
-
-		// 已解决与误报
-		if _, cnt, err := api.storage.QueryAlerts(map[string]interface{}{"status": string(AlertStatusResolved), "since": sinceStr}, 1, 1); err == nil {
-			stats.ResolvedAlerts = uint64(cnt)
-		} else {
-			log.Printf("统计已解决告警失败: %v", err)
-		}
-		if _, cnt, err := api.storage.QueryAlerts(map[string]interface{}{"status": string(AlertStatusFalsePositive), "since": sinceStr}, 1, 1); err == nil {
-			stats.FalsePositives = uint64(cnt)
-		} else {
-			log.Printf("统计误报告警失败: %v", err)
-		}
-
-		// 总告警数
-		if _, totalCnt, err := api.storage.QueryAlerts(map[string]interface{}{"since": sinceStr}, 1, 1); err == nil {
-			stats.TotalAlerts = uint64(totalCnt)
-		} else {
-			log.Printf("统计总告警失败: %v", err)
-		}
-
-		// 分布与平均解决时间（MySQL下）
-		if mysql, ok := api.storage.(*MySQLStorage); ok && mysql.DB != nil {
-			active, resolved, falsePositives, total, severityDist, categoryDist, avgResolution, err := mysql.GetAlertStats(api.startTime)
-			if err == nil {
-				stats.ActiveAlerts = active
-				stats.ResolvedAlerts = resolved
-				stats.FalsePositives = falsePositives
-				stats.TotalAlerts = total
-				stats.SeverityDistribution = severityDist
-				stats.CategoryDistribution = categoryDist
-				stats.AverageResolutionTime = avgResolution
-			} else {
-				log.Printf("获取MySQL统计信息失败: %v", err)
-			}
-		}
-	} else {
-		// 无存储时，回退到内存统计，但不混用
-		m := api.alertManager.GetAlertStats()
-		if m != nil {
-			stats = *m
-		}
-	}
+	// 使用统一的统计计算方法，确保与 WebSocket 推送一致
+	stats := api.computeAlertStats()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
 }
 
 // computeAlertStats 统一基于存储计算统计信息（用于WebSocket推送）
+// 注意：不再使用 since 时间过滤，统计所有告警以确保数据一致性
 func (api *AlertAPI) computeAlertStats() *AlertStats {
 	var stats AlertStats
 	if api.storage != nil {
-		sinceStr := api.startTime.Format(time.RFC3339)
-		// 活跃告警：new、acknowledged、in_progress
+		// 活跃告警：new、acknowledged、in_progress（不限制时间）
 		activeStatuses := []string{string(AlertStatusNew), string(AlertStatusAcknowledged), string(AlertStatusInProgress)}
 		activeTotal := 0
 		for _, st := range activeStatuses {
-			_, cnt, err := api.storage.QueryAlerts(map[string]interface{}{"status": st, "since": sinceStr}, 1, 1)
+			_, cnt, err := api.storage.QueryAlerts(map[string]interface{}{"status": st}, 1, 1)
 			if err != nil {
 				log.Printf("统计活跃告警失败(status=%s): %v", st, err)
 				continue
@@ -603,28 +547,28 @@ func (api *AlertAPI) computeAlertStats() *AlertStats {
 		}
 		stats.ActiveAlerts = uint64(activeTotal)
 
-		// 已解决与误报
-		if _, cnt, err := api.storage.QueryAlerts(map[string]interface{}{"status": string(AlertStatusResolved), "since": sinceStr}, 1, 1); err == nil {
+		// 已解决与误报（不限制时间）
+		if _, cnt, err := api.storage.QueryAlerts(map[string]interface{}{"status": string(AlertStatusResolved)}, 1, 1); err == nil {
 			stats.ResolvedAlerts = uint64(cnt)
 		} else {
 			log.Printf("统计已解决告警失败: %v", err)
 		}
-		if _, cnt, err := api.storage.QueryAlerts(map[string]interface{}{"status": string(AlertStatusFalsePositive), "since": sinceStr}, 1, 1); err == nil {
+		if _, cnt, err := api.storage.QueryAlerts(map[string]interface{}{"status": string(AlertStatusFalsePositive)}, 1, 1); err == nil {
 			stats.FalsePositives = uint64(cnt)
 		} else {
 			log.Printf("统计误报告警失败: %v", err)
 		}
 
-		// 总告警数
-		if _, totalCnt, err := api.storage.QueryAlerts(map[string]interface{}{"since": sinceStr}, 1, 1); err == nil {
+		// 总告警数（不限制时间）
+		if _, totalCnt, err := api.storage.QueryAlerts(map[string]interface{}{}, 1, 1); err == nil {
 			stats.TotalAlerts = uint64(totalCnt)
 		} else {
 			log.Printf("统计总告警失败: %v", err)
 		}
 
-		// 分布与平均解决时间（MySQL下）
+		// 分布与平均解决时间（MySQL下）- 使用零值时间表示统计所有告警
 		if mysql, ok := api.storage.(*MySQLStorage); ok && mysql.DB != nil {
-			active, resolved, falsePositives, total, severityDist, categoryDist, avgResolution, err := mysql.GetAlertStats(api.startTime)
+			active, resolved, falsePositives, total, severityDist, categoryDist, avgResolution, err := mysql.GetAlertStats(time.Time{})
 			if err == nil {
 				stats.ActiveAlerts = active
 				stats.ResolvedAlerts = resolved

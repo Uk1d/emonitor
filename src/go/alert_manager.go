@@ -443,12 +443,20 @@ func (am *AlertManager) findSimilarAlert(newAlert *ManagedAlert) *ManagedAlert {
 func (am *AlertManager) aggregateAlert(existingAlert, newAlert *ManagedAlert) (*ManagedAlert, error) {
 	existingAlert.UpdatedAt = time.Now()
 
+	// 如果现有告警是"新建"状态，更新为"处理中"表示有后续事件
+	if existingAlert.Status == AlertStatusNew {
+		existingAlert.Status = AlertStatusInProgress
+	}
+
 	// 添加处理注释
 	note := fmt.Sprintf("聚合告警: 相似事件在 %s 再次发生", newAlert.CreatedAt.Format("15:04:05"))
 	existingAlert.ProcessingNotes = append(existingAlert.ProcessingNotes, note)
 
-	log.Printf("告警已聚合: 现有ID=%s, 新事件时间=%s",
-		existingAlert.ID, newAlert.CreatedAt.Format("15:04:05"))
+	log.Printf("告警已聚合: 现有ID=%s, 新事件时间=%s, 状态=%s",
+		existingAlert.ID, newAlert.CreatedAt.Format("15:04:05"), existingAlert.Status)
+
+	// 持久化更新后的告警
+	go am.persistAlert(existingAlert)
 
 	return existingAlert, nil
 }

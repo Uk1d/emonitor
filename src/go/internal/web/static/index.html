@@ -888,18 +888,32 @@
             const includeChains = document.getElementById('include-chains')?.checked ?? true;
             const includeAI = document.getElementById('include-ai')?.checked ?? true;
 
+            // 正确获取按钮元素
+            let btn = null;
+            if (clickEvent && clickEvent.currentTarget) {
+                btn = clickEvent.currentTarget;
+            } else if (clickEvent && clickEvent.target) {
+                btn = clickEvent.target;
+            }
+
             try {
                 // 显示加载提示
-                const btn = clickEvent?.currentEventTarget || clickEvent?.target;
                 if (btn) {
-                    const originalText = btn.textContent;
-                    btn.textContent = '生成中...';
-                    btn.disabled = true;
+                    const valueDiv = btn.querySelector('.value');
+                    const originalText = valueDiv ? valueDiv.textContent : btn.textContent;
+                    if (valueDiv) {
+                        valueDiv.textContent = '生成中...';
+                    }
+                    btn.style.opacity = '0.6';
+                    btn.style.pointerEvents = 'none';
 
                     // 5秒后恢复按钮状态
                     setTimeout(() => {
-                        btn.textContent = originalText;
-                        btn.disabled = false;
+                        if (valueDiv) {
+                            valueDiv.textContent = originalText;
+                        }
+                        btn.style.opacity = '1';
+                        btn.style.pointerEvents = 'auto';
                     }, 5000);
                 }
 

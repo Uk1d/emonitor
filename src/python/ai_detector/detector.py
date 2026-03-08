@@ -93,20 +93,22 @@ class AIDetectorConfig:
     """AI 检测器配置"""
     def __init__(self):
         self.statistics_window = timedelta(minutes=5)
-        self.min_samples_for_baseline = 50
-        self.process_rate_threshold = 3.0
-        self.network_threshold = 3.0
-        self.file_threshold = 3.0
-        self.anomaly_score_threshold = 0.6
-        self.high_risk_threshold = 0.75
-        self.critical_threshold = 0.85
+        self.min_samples_for_baseline = 10  # 降低基线建立门槛，从50降到10
+        self.process_rate_threshold = 2.0   # 降低阈值，使检测更敏感
+        self.network_threshold = 2.0
+        self.file_threshold = 2.0
+        self.anomaly_score_threshold = 0.4  # 降低异常分数阈值，从0.6降到0.4
+        self.high_risk_threshold = 0.6      # 相应降低高危阈值
+        self.critical_threshold = 0.75      # 相应降低严重阈值
         self.max_history_size = 1000
-        self.suspicious_process_names = {".", "null", "random", "unknown", "test"}
-        self.suspicious_ports = {4444, 5555, 6666, 31337, 1337, 1234}
+        self.suspicious_process_names = {".", "null", "random", "unknown", "test", "sh", "bash", "nc", "ncat", "netcat"}
+        self.suspicious_ports = {4444, 5555, 6666, 31337, 1337, 1234, 4443, 8888, 9999}
         self.sensitive_files = [
             "/etc/passwd", "/etc/shadow", "/etc/sudoers",
             "/root/.ssh/", "/home/.ssh/",
-            "/var/log/auth.log", "/var/log/secure"
+            "/var/log/auth.log", "/var/log/secure",
+            "/etc/hosts", "/etc/resolv.conf", "/proc/self",
+            "/.ssh/", "/id_rsa", "/id_dsa", "/.bash_history"
         ]
 
 

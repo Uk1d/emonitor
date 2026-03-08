@@ -538,35 +538,77 @@ func (s *MySQLStorage) GetStats() (map[string]interface{}, error) {
 }
 
 // GetAlertStats 获取告警详细统计（用于 Web 展示）
+// 参数 since 为零值时表示统计所有告警，否则统计指定时间之后的告警
 func (s *MySQLStorage) GetAlertStats(since time.Time) (active, resolved, falsePositives, total uint64, severityDist, categoryDist map[string]uint64, avgResolution time.Duration, err error) {
 	if s.DB == nil {
 		return 0, 0, 0, 0, nil, nil, 0, nil
 	}
 
-	sinceStr := since.Format("2006-01-02 15:04:05")
+	// 构建时间条件：如果 since 是零值，则不限制时间
+	useTimeFilter := !since.IsZero()
+	var sinceStr string
+	if useTimeFilter {
+		sinceStr = since.Format("2006-01-02 15:04:05")
+	}
+
+	// 辅助函数：构建带时间条件的查询
+	buildQuery := func(baseQuery string) string {
+		if useTimeFilter {
+			return baseQuery + " AND created_at >= ?"
+		}
+		return baseQuery
+	}
 
 	// 活跃告警（new, acknowledged, in_progress）
 	activeStatuses := []string{"new", "acknowledged", "in_progress"}
 	for _, status := range activeStatuses {
 		var count int64
-		if e := s.DB.QueryRow("SELECT COUNT(*) FROM alerts WHERE status = ? AND created_at >= ?", status, sinceStr).Scan(&count); e == nil {
-			active += uint64(count)
+		query := buildQuery("SELECT COUNT(*) FROM alerts WHERE status = ?")
+		if useTimeFilter {
+			if e := s.DB.QueryRow(query, status, sinceStr).Scan(&count); e == nil {
+				active += uint64(count)
+			}
+		} else {
+			if e := s.DB.QueryRow(query, status).Scan(&count); e == nil {
+				active += uint64(count)
+			}
 		}
 	}
 
 	// 已解决告警
-	s.DB.QueryRow("SELECT COUNT(*) FROM alerts WHERE status = 'resolved' AND created_at >= ?", sinceStr).Scan(&resolved)
+	resolvedQuery := buildQuery("SELECT COUNT(*) FROM alerts WHERE status = 'resolved'")
+	if useTimeFilter {
+		s.DB.QueryRow(resolvedQuery, sinceStr).Scan(&resolved)
+	} else {
+		s.DB.QueryRow(resolvedQuery).Scan(&resolved)
+	}
 
 	// 误报告警
-	s.DB.QueryRow("SELECT COUNT(*) FROM alerts WHERE status = 'false_positive' AND created_at >= ?", sinceStr).Scan(&falsePositives)
+	falsePositiveQuery := buildQuery("SELECT COUNT(*) FROM alerts WHERE status = 'false_positive'")
+	if useTimeFilter {
+		s.DB.QueryRow(falsePositiveQuery, sinceStr).Scan(&falsePositives)
+	} else {
+		s.DB.QueryRow(falsePositiveQuery).Scan(&falsePositives)
+	}
 
 	// 总告警数
-	s.DB.QueryRow("SELECT COUNT(*) FROM alerts WHERE created_at >= ?", sinceStr).Scan(&total)
+	totalQuery := buildQuery("SELECT COUNT(*) FROM alerts")
+	if useTimeFilter {
+		s.DB.QueryRow(totalQuery, sinceStr).Scan(&total)
+	} else {
+		s.DB.QueryRow(totalQuery).Scan(&total)
+	}
 
 	// 严重级别分布
 	severityDist = make(map[string]uint64)
-	rows, e := s.DB.Query("SELECT severity, COUNT(*) FROM alerts WHERE created_at >= ? GROUP BY severity", sinceStr)
-	if e == nil {
+	severityQuery := buildQuery("SELECT severity, COUNT(*) FROM alerts WHERE severity IS NOT NULL AND severity != '' GROUP BY severity")
+	var rows *sql.Rows
+	if useTimeFilter {
+		rows, err = s.DB.Query(severityQuery, sinceStr)
+	} else {
+		rows, err = s.DB.Query(severityQuery)
+	}
+	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
 			var sev string
@@ -579,35 +621,72 @@ func (s *MySQLStorage) GetAlertStats(since time.Time) (active, resolved, falsePo
 
 	// 类别分布
 	categoryDist = make(map[string]uint64)
-	rows2, e := s.DB.Query("SELECT category, COUNT(*) FROM alerts WHERE created_at >= ? GROUP BY category", sinceStr)
-	if e == nil {
-		defer rows2.Close()
-		for rows2.Next() {
-			var cat string
-			var count int64
-			if rows2.Scan(&cat, &count) == nil {
-				categoryDist[cat] = uint64(count)
+	categoryQuery := buildQuery("SELECT category, COUNT(*) FROM alerts WHERE category IS NOT NULL AND category != '' GROUP BY category")
+	if useTimeFilter {
+		rows2, e := s.DB.Query(categoryQuery, sinceStr)
+		if e == nil {
+			defer rows2.Close()
+			for rows2.Next() {
+				var cat string
+				var count int64
+				if rows2.Scan(&cat, &count) == nil {
+					categoryDist[cat] = uint64(count)
+				}
+			}
+		}
+	} else {
+		rows2, e := s.DB.Query(categoryQuery)
+		if e == nil {
+			defer rows2.Close()
+			for rows2.Next() {
+				var cat string
+				var count int64
+				if rows2.Scan(&cat, &count) == nil {
+					categoryDist[cat] = uint64(count)
+				}
 			}
 		}
 	}
 
 	// 平均解决时间
-	rows3, e := s.DB.Query("SELECT created_at, updated_at FROM alerts WHERE status = 'resolved' AND created_at >= ?", sinceStr)
-	if e == nil {
-		defer rows3.Close()
-		var totalDur time.Duration
-		var count int
-		for rows3.Next() {
-			var created, updated time.Time
-			if rows3.Scan(&created, &updated) == nil {
-				if updated.After(created) {
-					totalDur += updated.Sub(created)
-					count++
+	resolutionQuery := buildQuery("SELECT created_at, updated_at FROM alerts WHERE status = 'resolved' AND created_at IS NOT NULL AND updated_at IS NOT NULL")
+	if useTimeFilter {
+		rows3, e := s.DB.Query(resolutionQuery, sinceStr)
+		if e == nil {
+			defer rows3.Close()
+			var totalDur time.Duration
+			var count int
+			for rows3.Next() {
+				var created, updated time.Time
+				if rows3.Scan(&created, &updated) == nil {
+					if updated.After(created) {
+						totalDur += updated.Sub(created)
+						count++
+					}
 				}
 			}
+			if count > 0 {
+				avgResolution = totalDur / time.Duration(count)
+			}
 		}
-		if count > 0 {
-			avgResolution = totalDur / time.Duration(count)
+	} else {
+		rows3, e := s.DB.Query(resolutionQuery)
+		if e == nil {
+			defer rows3.Close()
+			var totalDur time.Duration
+			var count int
+			for rows3.Next() {
+				var created, updated time.Time
+				if rows3.Scan(&created, &updated) == nil {
+					if updated.After(created) {
+						totalDur += updated.Sub(created)
+						count++
+					}
+				}
+			}
+			if count > 0 {
+				avgResolution = totalDur / time.Duration(count)
+			}
 		}
 	}
 
