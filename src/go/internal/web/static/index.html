@@ -282,15 +282,15 @@
             </div>
             <div class="panel-body no-scroll" style="padding: 20px;">
                 <div class="stats-grid" style="margin-bottom: 20px;">
-                    <div class="stat-card" onclick="generateReport('json')" style="cursor: pointer;">
+                    <div class="stat-card" onclick="generateReport('json', event)" style="cursor: pointer;">
                         <div class="label">JSON 报告</div>
                         <div class="value">导出</div>
                     </div>
-                    <div class="stat-card" onclick="generateReport('html')" style="cursor: pointer;">
+                    <div class="stat-card" onclick="generateReport('html', event)" style="cursor: pointer;">
                         <div class="label">HTML 报告</div>
                         <div class="value">导出</div>
                     </div>
-                    <div class="stat-card" onclick="generateReport('csv')" style="cursor: pointer;">
+                    <div class="stat-card" onclick="generateReport('csv', event)" style="cursor: pointer;">
                         <div class="label">CSV 报告</div>
                         <div class="value">导出</div>
                     </div>
@@ -882,22 +882,31 @@
         }
 
         // 生成报告
-        async function generateReport(format) {
-            const includeEvents = document.getElementById('include-events').checked;
-            const includeAlerts = document.getElementById('include-alerts').checked;
-            const includeChains = document.getElementById('include-chains').checked;
-            const includeAI = document.getElementById('include-ai').checked;
+        async function generateReport(format, clickEvent) {
+            const includeEvents = document.getElementById('include-events')?.checked ?? true;
+            const includeAlerts = document.getElementById('include-alerts')?.checked ?? true;
+            const includeChains = document.getElementById('include-chains')?.checked ?? true;
+            const includeAI = document.getElementById('include-ai')?.checked ?? true;
 
             try {
                 // 显示加载提示
-                const btn = event.currentTarget;
-                const originalText = btn.textContent;
-                btn.textContent = '生成中...';
-                btn.disabled = true;
+                const btn = clickEvent?.currentEventTarget || clickEvent?.target;
+                if (btn) {
+                    const originalText = btn.textContent;
+                    btn.textContent = '生成中...';
+                    btn.disabled = true;
+
+                    // 5秒后恢复按钮状态
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                        btn.disabled = false;
+                    }, 5000);
+                }
 
                 const resp = await fetch('/api/reports/generate?format=' + format);
                 if (!resp.ok) {
-                    throw new Error('生成报告失败');
+                    const errorText = await resp.text();
+                    throw new Error('生成报告失败: ' + errorText);
                 }
 
                 // 创建 Blob 并下载
@@ -910,10 +919,6 @@
                 a.click();
                 document.body.removeChild(a);
                 URL.revokeObjectURL(url);
-
-                // 恢复按钮
-                btn.textContent = originalText;
-                btn.disabled = false;
 
             } catch(e) {
                 console.error('生成报告失败:', e);
