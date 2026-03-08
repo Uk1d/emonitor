@@ -105,6 +105,26 @@ check_web_dependencies() {
     return 0
 }
 
+# 检查 Python 服务依赖
+check_python_dependencies() {
+    echo -e "${BLUE}检查 Python 服务依赖...${NC}"
+
+    if [ ! -f "${PROJECT_ROOT}/src/python/service.py" ]; then
+        echo -e "${RED}错误: Python 服务文件不存在${NC}"
+        return 1
+    fi
+
+    # 检查 Python 依赖
+    python3 -c "import flask, flask_cors, numpy" 2>/dev/null
+    if [ $? -ne 0 ]; then
+        echo -e "${YELLOW}警告: Python 依赖未完全安装${NC}"
+        echo -e "${YELLOW}运行: pip3 install --break-system-packages flask flask-cors numpy${NC}"
+    fi
+
+    echo -e "${GREEN}Python 服务依赖检查通过${NC}"
+    return 0
+}
+
 # 构建项目
 build_project() {
     echo -e "${BLUE}构建项目...${NC}"
@@ -115,7 +135,28 @@ build_project() {
 
 # 启动集成模式
 start_integrated() {
-    echo -e "${BLUE}启动 eTracee（集成模式）...${NC}"
+    echo -e "${BLUE}启动 eTracee（集成模式 + Python AI 服务）...${NC}"
+
+    # 启动 Python AI 服务（后台）
+    echo -e "${GREEN}启动 Python AI 检测服务...${NC}"
+    cd "${PROJECT_ROOT}/src/python"
+    export PYTHON_SERVICE_PORT="${PYTHON_SERVICE_PORT:-9900}"
+    python3 service.py &
+    PYTHON_PID=$!
+
+    # 等待 Python 服务启动
+    sleep 2
+
+    # 检查 Python 服务是否运行
+    if ! kill -0 $PYTHON_PID 2>/dev/null; then
+        echo -e "${RED}Python 服务启动失败${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}Python 服务已启动 (PID: $PYTHON_PID)${NC}"
+
+    # 捕获退出信号
+    trap "kill $PYTHON_PID 2>/dev/null" SIGINT SIGTERM
 
     ARGS="-config $CONFIG_FILE"
     if [ "$DASHBOARD" = true ]; then
@@ -131,7 +172,28 @@ start_integrated() {
 
 # 启动监控程序（分离模式）
 start_monitor() {
-    echo -e "${BLUE}启动监控程序（分离模式）...${NC}"
+    echo -e "${BLUE}启动监控程序（分离模式 + Python AI 服务）...${NC}"
+
+    # 启动 Python AI 服务（后台）
+    echo -e "${GREEN}启动 Python AI 检测服务...${NC}"
+    cd "${PROJECT_ROOT}/src/python"
+    export PYTHON_SERVICE_PORT="${PYTHON_SERVICE_PORT:-9900}"
+    python3 service.py &
+    PYTHON_PID=$!
+
+    # 等待 Python 服务启动
+    sleep 2
+
+    # 检查 Python 服务是否运行
+    if ! kill -0 $PYTHON_PID 2>/dev/null; then
+        echo -e "${RED}Python 服务启动失败${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}Python 服务已启动 (PID: $PYTHON_PID)${NC}"
+
+    # 捕获退出信号
+    trap "kill $PYTHON_PID 2>/dev/null" SIGINT SIGTERM
 
     ARGS="-config $CONFIG_FILE -monitor-only"
 
@@ -167,9 +229,22 @@ start_web() {
     exec "$WEBSERVER_BINARY"
 }
 
+# 启动 Python AI 检测服务
+start_python() {
+    echo -e "${BLUE}启动 Python AI 检测服务...${NC}"
+
+    cd "${PROJECT_ROOT}/src/python"
+    export PYTHON_SERVICE_PORT="${PYTHON_SERVICE_PORT:-9900}"
+
+    echo -e "${GREEN}Python 服务地址: http://127.0.0.1:${PYTHON_SERVICE_PORT}${NC}"
+    echo ""
+
+    exec python3 service.py
+}
+
 # 启动分离模式（同时启动监控程序和 Web 服务）
 start_split() {
-    echo -e "${BLUE}启动分离模式（监控程序 + Web 服务）...${NC}"
+    echo -e "${BLUE}启动分离模式（监控程序 + Web 服务 + Python AI 服务）...${NC}"
 
     # 启动监控程序（后台）
     echo -e "${GREEN}启动监控程序...${NC}"
@@ -186,6 +261,23 @@ start_split() {
         exit 1
     fi
 
+    # 启动 Python AI 服务（后台）
+    echo -e "${GREEN}启动 Python AI 检测服务...${NC}"
+    cd "${PROJECT_ROOT}/src/python"
+    export PYTHON_SERVICE_PORT="${PYTHON_SERVICE_PORT:-9900}"
+    python3 service.py &
+    PYTHON_PID=$!
+
+    # 等待 Python 服务启动
+    sleep 2
+
+    # 检查 Python 服务是否运行
+    if ! kill -0 $PYTHON_PID 2>/dev/null; then
+        echo -e "${RED}Python 服务启动失败${NC}"
+        sudo kill $MONITOR_PID 2>/dev/null
+        exit 1
+    fi
+
     # 启动 Web 服务（前台）
     echo -e "${GREEN}启动 Web 服务...${NC}"
     export WEB_PORT="${WEB_PORT:-8888}"
@@ -195,7 +287,7 @@ start_split() {
     echo ""
 
     # 捕获退出信号
-    trap "echo -e '${YELLOW}正在停止服务...${NC}'; sudo kill $MONITOR_PID 2>/dev/null; exit 0" SIGINT SIGTERM
+    trap "echo -e '${YELLOW}正在停止服务...${NC}'; sudo kill $MONITOR_PID 2>/dev/null; kill $PYTHON_PID 2>/dev/null; exit 0" SIGINT SIGTERM
 
     # 运行 Web 服务
     "$WEBSERVER_BINARY"
@@ -264,6 +356,7 @@ case $MODE in
             build_project
         fi
         check_dependencies
+        check_python_dependencies
         check_root "$@"
         start_integrated
         ;;
@@ -272,6 +365,7 @@ case $MODE in
             build_project
         fi
         check_dependencies
+        check_python_dependencies
         check_root "$@"
         start_monitor
         ;;
