@@ -1455,6 +1455,33 @@ func main() {
 			// 应用增强安全规则引擎
 			alerts := ruleEngine.MatchRules(event)
 
+			// AI 异常检测（异步，避免阻塞主处理流程）
+			go func(evt *EventJSON) {
+				if anomalyResult, err := pythonClient.DetectEvent(evt); err == nil && anomalyResult != nil {
+					if anomaly, ok := (*anomalyResult)["anomaly"].(map[string]interface{}); ok {
+						log.Printf("[*] AI 检测到异常: %s", anomaly["description"])
+						// 创建 AI 告警
+						aiAlert := &AlertEvent{
+							RuleName:    "AI异常检测",
+							Description: fmt.Sprintf("%v", anomaly["description"]),
+							Severity:    fmt.Sprintf("%v", anomaly["severity"]),
+							Category:    "ai",
+							Timestamp:   time.Now(),
+						}
+						// 处理 AI 告警
+						if managedAlert, err := alertManager.ProcessAlert(*aiAlert); err == nil {
+							// WebSocket 推送 AI 告警
+							if alertAPI != nil {
+								alertAPI.BroadcastAlert(managedAlert)
+							}
+							if wsServer != nil {
+								wsServer.BroadcastAlert(managedAlert)
+							}
+						}
+					}
+				}
+			}(event)
+
 			// 更新事件上下文（用于攻击链重建）
 			eventContext.UpdateProcessContext(event)
 
