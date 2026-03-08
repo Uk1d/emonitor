@@ -24,12 +24,12 @@ import (
 
 // AlertAPI 告警API服务器
 type AlertAPI struct {
-	alertManager *AlertManager
-	server       *http.Server
-	storage      Storage
-	eventContext *EventContext
-	aiDetector   *AIDetector
-	authService  *auth.AuthService
+	alertManager    *AlertManager
+	server         *http.Server
+	storage        Storage
+	eventContext   *EventContext
+	pythonClient   *PythonServiceClient
+	authService    *auth.AuthService
 
 	// 路由和中间件（用于重建处理器链）
 	mux    *http.ServeMux
@@ -54,12 +54,13 @@ type AlertAPI struct {
 }
 
 // NewAlertAPI 创建告警API服务器
-func NewAlertAPI(alertManager *AlertManager, port int, storage Storage, eventContext *EventContext, aiDetector *AIDetector) *AlertAPI {
+func NewAlertAPI(alertManager *AlertManager, port int, storage Storage, eventContext *EventContext, _ interface{}) *AlertAPI {
 	api := &AlertAPI{
-		alertManager: alertManager,
-		storage:      storage,
-		eventContext: eventContext,
-		aiDetector:   aiDetector,
+		alertManager:  alertManager,
+		storage:       storage,
+		eventContext:  eventContext,
+		// 初始化 Python 服务客户端
+		pythonClient: NewPythonServiceClient("127.0.0.1", 9900),
 	}
 
 	mux := http.NewServeMux()
@@ -855,38 +856,25 @@ func (api *AlertAPI) handleGenerateReport(w http.ResponseWriter, r *http.Request
 		reportFormat = "json"
 	}
 
-	// 创建报告生成器
-	reportConfig := &ReportConfig{
-		OutputDir:     "reports",
-		IncludeEvents:  true,
-		IncludeAlerts:  true,
-		IncludeChains:  true,
-		IncludeAI:      api.aiDetector != nil,
-		MaxEvents:      1000,
-		MaxAlerts:      500,
-		ReportName:     "安全检测报告",
-		AuthorName:     "eTracee",
-	}
-	reportGenerator := NewReportGenerator(api.eventContext, api.alertManager, api.aiDetector, reportConfig)
-
-	// 生成报告
-	reportData, err := reportGenerator.GenerateReport(reportFormat)
+	// 调用 Python 服务生成报告
+	reportData, contentType, err := api.pythonClient.GenerateReport(reportFormat)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("生成报告失败: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	// 设置响应头
+	if contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+
 	switch reportFormat {
 	case "html":
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Content-Disposition", `inline; filename="security_report.html"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="security_report.html"`)
 	case "csv":
-		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		w.Header().Set("Content-Disposition", `inline; filename="security_report.csv"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="security_report.csv"`)
 	default:
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Disposition", `inline; filename="security_report.json"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="security_report.json"`)
 	}
 
 	w.Write(reportData)
@@ -899,11 +887,6 @@ func (api *AlertAPI) handleGetAnomalies(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if api.aiDetector == nil {
-		http.Error(w, "AI detector not available", http.StatusServiceUnavailable)
-		return
-	}
-
 	// 获取限制参数
 	limit := 100
 	if l := r.URL.Query().Get("limit"); l != "" {
@@ -912,8 +895,12 @@ func (api *AlertAPI) handleGetAnomalies(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// 获取异常列表
-	anomalies := api.aiDetector.GetRecentAnomalies(limit)
+	// 调用 Python 服务获取异常列表
+	anomalies, err := api.pythonClient.GetAnomalies(limit)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("获取异常失败: %v", err), http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -923,73 +910,14 @@ func (api *AlertAPI) handleGetAnomalies(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// handleExportReport 处理报告导出请求
+// handleExportReport 处理报告导出请求（已废弃，使用 handleGenerateReport）
 func (api *AlertAPI) handleExportReport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+	// 重定向到 generate 端点
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		format = "json"
 	}
 
-	if api.aiDetector == nil {
-		http.Error(w, "AI detector not available", http.StatusServiceUnavailable)
-		return
-	}
-
-	// 解析请求参数
-	var req struct {
-		Format   string `json:"format"`
-		ReportName string `json:"report_name"`
-		AuthorName string `json:"author_name"`
-		IncludeEvents bool `json:"include_events"`
-		IncludeAlerts bool `json:"include_alerts"`
-		IncludeChains bool `json:"include_chains"`
-		IncludeAI     bool `json:"include_ai"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("解析请求失败: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	// 设置默认值
-	if req.Format == "" {
-		req.Format = "json"
-	}
-	if req.ReportName == "" {
-		req.ReportName = "安全检测报告"
-	}
-	if req.AuthorName == "" {
-		req.AuthorName = "eTracee"
-	}
-
-	// 创建报告生成器
-	reportConfig := &ReportConfig{
-		OutputDir:     "reports",
-		IncludeEvents:  req.IncludeEvents,
-		IncludeAlerts:  req.IncludeAlerts,
-		IncludeChains:  req.IncludeChains,
-		IncludeAI:      req.IncludeAI,
-		MaxEvents:      1000,
-		MaxAlerts:      500,
-		ReportName:     req.ReportName,
-		AuthorName:     req.AuthorName,
-	}
-	reportGenerator := NewReportGenerator(api.eventContext, api.alertManager, api.aiDetector, reportConfig)
-
-	// 生成并保存报告
-	filepath, err := reportGenerator.SaveReport(req.Format)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("保存报告失败: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// 返回文件路径
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":   true,
-		"filepath":  filepath,
-		"format":    req.Format,
-		"timestamp":  time.Now().Format(time.RFC3339),
-	})
+	http.Redirect(w, r, "/api/reports/generate?format="+format, http.StatusPermanentRedirect)
 }
 
