@@ -132,12 +132,18 @@ class AIDetector:
         """
         self._update_statistics(event)
 
-        # 检查基线是否已建立
+        # 基本异常检测（即使基线未建立）
+        anomaly = self._detect_basic_anomaly(event)
+        if anomaly:
+            self._record_anomaly(anomaly)
+            return anomaly
+
+        # 基线建立后的统计异常检测
         if self._is_baseline_ready():
             anomaly = self._detect_anomaly(event)
             if anomaly:
                 self._record_anomaly(anomaly)
-            return anomaly
+                return anomaly
 
         return None
 
@@ -249,6 +255,92 @@ class AIDetector:
                 'protocol': 'tcp',
                 'start_time': datetime.now().isoformat()
             })
+
+    def _detect_basic_anomaly(self, event: Dict) -> Optional[Anomaly]:
+        """
+        基本异常检测（不依赖基线）
+
+        Args:
+            event: 事件字典
+
+        Returns:
+            检测到的异常对象，如果没有异常则返回 None
+        """
+        pid = event.get('pid', 0)
+        comm = event.get('comm', '')
+        event_type = event.get('event_type', '')
+        filename = event.get('filename', '')
+        dst_addr = event.get('dst_addr')
+
+        evidences = []
+        anomaly_score = 0.0
+        factors = {}
+
+        # 1. 检查可疑进程名
+        if comm in self.config.suspicious_process_names:
+            anomaly_score += 0.8
+            factors['suspicious_name'] = 0.8
+            evidences.append(AnomalyEvidence(
+                evidence_type='suspicious_name',
+                value=comm,
+                timestamp=datetime.now(),
+                context='可疑进程名'
+            ))
+
+        # 2. 检查敏感文件访问
+        if filename:
+            for sensitive in self.config.sensitive_files:
+                if filename.startswith(sensitive):
+                    anomaly_score += 0.9
+                    factors['sensitive_file'] = 0.9
+                    evidences.append(AnomalyEvidence(
+                        evidence_type='sensitive_file_access',
+                        value=filename,
+                        timestamp=datetime.now(),
+                        context='访问敏感文件'
+                    ))
+                    break
+
+        # 3. 检查连接到可疑端口
+        if dst_addr:
+            remote_port = dst_addr.get('port', 0)
+            if remote_port in self.config.suspicious_ports:
+                anomaly_score += 0.7
+                factors['suspicious_port'] = 0.7
+                evidences.append(AnomalyEvidence(
+                    evidence_type='suspicious_port',
+                    value=remote_port,
+                    timestamp=datetime.now(),
+                    context='连接到可疑端口'
+                ))
+
+        # 确定严重级别
+        severity = Severity.LOW
+        if anomaly_score >= 0.85:
+            severity = Severity.CRITICAL
+        elif anomaly_score >= 0.6:
+            severity = Severity.HIGH
+        elif anomaly_score >= 0.4:
+            severity = Severity.MEDIUM
+
+        # 如果异常分数超过阈值，创建异常
+        if anomaly_score >= self.config.anomaly_score_threshold:
+            return Anomaly(
+                id=f'anomaly_{pid}_{datetime.now().timestamp()}',
+                anomaly_type=AnomalyType.PROCESS_BEHAVIOR,
+                severity=severity,
+                confidence=min(anomaly_score, 1.0),
+                description=f'基本异常检测: 可疑行为 (分数: {anomaly_score:.2f})',
+                detected_at=datetime.now(),
+                pid=pid,
+                process_name=comm,
+                category='security',
+                evidence=evidences,
+                anomaly_score=anomaly_score,
+                contributing_factors=factors
+            )
+
+        return None
 
     def _detect_anomaly(self, event: Dict) -> Optional[Anomaly]:
         """
