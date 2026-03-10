@@ -257,6 +257,7 @@ def receive_events():
         # 处理告警
         if 'alerts' in data:
             alerts_buffer.extend(data['alerts'])
+            app.logger.info(f"接收到 {len(data['alerts'])} 条告警")
 
         # 处理攻击链
         if 'chains' in data:
@@ -292,21 +293,14 @@ def clear_data():
 
 
 def _add_alert_from_anomaly(anomaly):
-    """从异常创建告警并添加到缓冲区"""
-    alert = {
-        'rule_name': 'AI异常检测',
-        'description': anomaly.description,
-        'severity': anomaly.severity.value,
-        'category': anomaly.category,
-        'timestamp': anomaly.detected_at.isoformat(),
-        'pid': anomaly.pid,
-        'process_name': anomaly.process_name,
-        'status': 'active'
-    }
-    alerts_buffer.append(alert)
+    """从异常创建告警并添加到缓冲区
 
-    if len(alerts_buffer) > buffer_max_size:
-        alerts_buffer.pop(0)
+    注意：此函数现在不再创建告警，只记录异常
+    告警由Go端的规则引擎统一处理，避免重复告警
+    """
+    # 不再创建告警，避免与Go端规则引擎告警重复
+    # 异常数据已通过 /api/ai/anomalies 端点提供
+    pass
 
 
 def _trim_buffers():

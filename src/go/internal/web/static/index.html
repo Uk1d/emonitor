@@ -614,22 +614,53 @@
             if (buffer.alerts.length > 0) {
                 // 告警去重：相同ID的告警只保留最新的状态
                 const alertMap = new Map();
-                // 先添加现有告警
+
+                // 先添加现有告警（保留已有状态）
                 for (const a of state.alerts) {
                     const id = a.ID || a.id;
                     if (id) alertMap.set(id, a);
                 }
-                // 再用新告警覆盖（保留最新状态）
-                for (const a of buffer.alerts.reverse()) {
+
+                // 处理新告警，相同ID的告警更新状态而不是创建新条目
+                for (const a of buffer.alerts) {
                     const id = a.ID || a.id;
-                    if (id) alertMap.set(id, a);
+                    if (!id) continue;
+
+                    const existing = alertMap.get(id);
+                    if (existing) {
+                        // 更新现有告警的状态（保留最新状态）
+                        const newStatus = a.Status || a.status || 'new';
+                        const existingStatus = existing.Status || existing.status || 'new';
+
+                        // 只有当新状态更"新"时才更新（状态优先级：new < acknowledged < in_progress < resolved）
+                        const statusPriority = {
+                            'new': 0,
+                            'acknowledged': 1,
+                            'in_progress': 2,
+                            'resolved': 3,
+                            'false_positive': 3
+                        };
+
+                        const newPriority = statusPriority[newStatus] || 0;
+                        const existingPriority = statusPriority[existingStatus] || 0;
+
+                        if (newPriority >= existingPriority) {
+                            // 新状态更高级或相同，更新整个告警对象
+                            alertMap.set(id, {...existing, ...a});
+                        }
+                    } else {
+                        // 新告警，直接添加
+                        alertMap.set(id, a);
+                    }
                 }
+
                 // 转换为数组并按时间排序（最新的在前）
                 state.alerts = Array.from(alertMap.values()).sort((a, b) => {
                     const tA = new Date(a.CreatedAt || a.created_at || a.Timestamp).getTime();
                     const tB = new Date(b.CreatedAt || b.created_at || b.Timestamp).getTime();
                     return tB - tA;
                 }).slice(0, MAX_ALERTS);
+
                 buffer.alerts = [];
                 renderAlerts();
             }
@@ -642,9 +673,14 @@
 
         // 更新统计数据显示
         function updateStatsUI() {
-            els.totalAlerts.textContent = state.stats.total || 0;
-            els.activeAlerts.textContent = state.stats.active || 0;
-            els.resolvedAlerts.textContent = state.stats.resolved || 0;
+            // 支持多种可能的字段名（后端可能返回 total/total_alerts 等）
+            const total = state.stats.total || state.stats.total_alerts || 0;
+            const active = state.stats.active || state.stats.active_alerts || 0;
+            const resolved = state.stats.resolved || state.stats.resolved_alerts || 0;
+
+            els.totalAlerts.textContent = total;
+            els.activeAlerts.textContent = active;
+            els.resolvedAlerts.textContent = resolved;
         }
 
         // 更新事件计数显示
@@ -772,7 +808,11 @@
         // 获取攻击链图谱数据
         async function fetchAttackGraph() {
             try {
-                const resp = await fetch('/api/attack-chains/graph');
+                const resp = await fetch('/api/attack-chains/graph', {
+                    headers: {
+                        'Authorization': 'Bearer ' + getAuthToken()
+                    }
+                });
                 if (!resp.ok) return;
                 const graph = await resp.json();
                 renderGraph(graph);
@@ -837,7 +877,11 @@
         // 获取 AI 异常列表
         async function fetchAnomalies() {
             try {
-                const resp = await fetch('/api/reports/anomalies');
+                const resp = await fetch('/api/reports/anomalies', {
+                    headers: {
+                        'Authorization': 'Bearer ' + getAuthToken()
+                    }
+                });
                 if (!resp.ok) return;
                 const data = await resp.json();
                 state.anomalies = data.anomalies || [];
@@ -853,8 +897,11 @@
             const severityFilter = document.getElementById('anomaly-severity-filter').value;
 
             const filtered = state.anomalies.filter(function(a) {
-                if (typeFilter && a.type !== typeFilter) return false;
-                if (severityFilter && a.severity !== severityFilter) return false;
+                // 支持多种可能的字段名
+                const anomalyType = a.anomaly_type || a.type || '';
+                const severity = a.severity || '';
+                if (typeFilter && anomalyType !== typeFilter) return false;
+                if (severityFilter && severity !== severityFilter) return false;
                 return true;
             });
 
@@ -862,18 +909,29 @@
             if (!tbody) return;
 
             tbody.innerHTML = filtered.slice(0, 50).map(function(a) {
+                // 支持多种可能的字段名
+                const anomalyType = a.anomaly_type || a.type || '';
+                const severity = a.severity || 'low';
+                const detectedAt = a.detected_at || a.timestamp || '';
+                const processName = a.process_name || a.comm || '-';
+                const pid = a.pid || 0;
+                const confidence = a.confidence || a.anomaly_score || 0;
+
                 const typeText = {
                     'process_behavior': '进程行为',
                     'network_activity': '网络活动',
                     'file_activity': '文件活动',
                     'privilege_escalation': '权限提升'
-                }[a.type] || a.type;
+                }[anomalyType] || anomalyType;
+
+                const sevText = severityMap[severity] || severity.toUpperCase();
+
                 return '<tr>' +
-                    '<td>' + formatTime(a.detected_at) + '</td>' +
+                    '<td>' + formatTime(detectedAt) + '</td>' +
                     '<td>' + typeText + '</td>' +
-                    '<td><span class="badge ' + a.severity + '">' + a.severity + '</span></td>' +
-                    '<td>' + (a.process_name || '-') + ' (PID: ' + a.pid + ')</td>' +
-                    '<td>' + (a.confidence * 100).toFixed(1) + '%</td></tr>';
+                    '<td><span class="badge ' + severity + '">' + sevText + '</span></td>' +
+                    '<td>' + processName + ' (PID: ' + pid + ')</td>' +
+                    '<td>' + (confidence * 100).toFixed(1) + '%</td></tr>';
             }).join('');
 
             if (filtered.length === 0) {
@@ -917,7 +975,11 @@
                     }, 5000);
                 }
 
-                const resp = await fetch('/api/reports/generate?format=' + format);
+                const resp = await fetch('/api/reports/generate?format=' + format, {
+                    headers: {
+                        'Authorization': 'Bearer ' + getAuthToken()
+                    }
+                });
                 if (!resp.ok) {
                     const errorText = await resp.text();
                     throw new Error('生成报告失败: ' + errorText);
@@ -942,6 +1004,9 @@
 
         // 启动应用
         init();
+
+        // 将 generateReport 暴露到全局作用域，供 HTML onclick 属性调用
+        window.generateReport = generateReport;
     })();
     </script>
 </body>

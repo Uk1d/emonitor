@@ -1484,28 +1484,15 @@ func main() {
 			alerts := ruleEngine.MatchRules(event)
 
 			// AI 异常检测（异步，避免阻塞主处理流程）
+			// 注意：AI检测的异常只发送到Python服务用于报告生成，不直接创建告警
+			// 这样可以避免与规则引擎告警重复
 			go func(evt *EventJSON) {
 				if anomalyResult, err := pythonClient.DetectEvent(evt); err == nil && anomalyResult != nil {
-					if anomaly, ok := (*anomalyResult)["anomaly"].(map[string]interface{}); ok {
-						log.Printf("[*] AI 检测到异常: %s", anomaly["description"])
-						// 创建 AI 告警
-						aiAlert := &AlertEvent{
-							RuleName:    "AI异常检测",
-							Description: fmt.Sprintf("%v", anomaly["description"]),
-							Severity:    fmt.Sprintf("%v", anomaly["severity"]),
-							Category:    "ai",
-							Timestamp:   time.Now(),
-						}
-						// 处理 AI 告警
-						if managedAlert, err := alertManager.ProcessAlert(*aiAlert); err == nil {
-							// WebSocket 推送 AI 告警
-							if alertAPI != nil {
-								alertAPI.BroadcastAlert(managedAlert)
-							}
-							if wsServer != nil {
-								wsServer.BroadcastAlert(managedAlert)
-							}
-						}
+					// 检查是否有异常检测结果
+					if anomalyData, ok := (*anomalyResult)["anomaly"].(map[string]interface{}); ok && anomalyData != nil {
+						log.Printf("[*] AI 检测到异常: %s", anomalyData["description"])
+						// AI检测的异常只记录到Python服务，不创建告警
+						// 告警由规则引擎统一处理，避免重复
 					}
 				}
 			}(event)
@@ -1532,10 +1519,16 @@ func main() {
 					Severity:    alert.Severity,
 					Category:    alert.Category,
 					Timestamp:   time.Now(),
+					Event:       event,
 				}
 
 				// 检测攻击链
 				eventContext.DetectAttackChain(event, alertEvent)
+
+				// 发送告警到 Python 服务用于报告生成（同步发送确保数据不丢失）
+				if err := pythonClient.SendAlert(alertEvent); err != nil {
+					log.Printf("发送告警到Python服务失败: %v", err)
+				}
 			}
 
 			// 无告警事件：如果存在相关攻击链则更新（不新建），以避免评分停滞
@@ -1601,7 +1594,10 @@ func main() {
 				}
 			}
 
-			// 告警生成由规则引擎与告警管理器统一处理，移除重复路径
+			// 发送事件到 Python 服务用于 AI 检测和报告生成（同步发送确保数据不丢失）
+			if err := pythonClient.SendEvents([]*EventJSON{event}); err != nil {
+				// 静默处理错误，避免噪声
+			}
 
 			// 输出JSON
 			if jsonData, err := json.Marshal(event); err == nil {

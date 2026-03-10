@@ -129,9 +129,9 @@ type NotificationChannel interface {
 
 // AlertStats 告警统计
 type AlertStats struct {
-	TotalAlerts           uint64            `json:"total_alerts"`
-	ActiveAlerts          uint64            `json:"active_alerts"`
-	ResolvedAlerts        uint64            `json:"resolved_alerts"`
+	TotalAlerts           uint64            `json:"total"`
+	ActiveAlerts          uint64            `json:"active"`
+	ResolvedAlerts        uint64            `json:"resolved"`
 	FalsePositives        uint64            `json:"false_positives"`
 	SeverityDistribution  map[string]uint64 `json:"severity_distribution"`
 	CategoryDistribution  map[string]uint64 `json:"category_distribution"`
@@ -443,14 +443,20 @@ func (am *AlertManager) findSimilarAlert(newAlert *ManagedAlert) *ManagedAlert {
 func (am *AlertManager) aggregateAlert(existingAlert, newAlert *ManagedAlert) (*ManagedAlert, error) {
 	existingAlert.UpdatedAt = time.Now()
 
-	// 如果现有告警是"新建"状态，更新为"处理中"表示有后续事件
-	if existingAlert.Status == AlertStatusNew {
-		existingAlert.Status = AlertStatusInProgress
-	}
-
 	// 添加处理注释
 	note := fmt.Sprintf("聚合告警: 相似事件在 %s 再次发生", newAlert.CreatedAt.Format("15:04:05"))
 	existingAlert.ProcessingNotes = append(existingAlert.ProcessingNotes, note)
+
+	// 增加聚合计数
+	if existingAlert.ActionResults == nil {
+		existingAlert.ActionResults = make(map[string]ActionResult)
+	}
+	existingAlert.ActionResults["aggregation_count"] = ActionResult{
+		Action:     "aggregation_count",
+		Status:     "success",
+		Message:    fmt.Sprintf("聚合次数: %d", len(existingAlert.ProcessingNotes)),
+		ExecutedAt: time.Now(),
+	}
 
 	log.Printf("告警已聚合: 现有ID=%s, 新事件时间=%s, 状态=%s",
 		existingAlert.ID, newAlert.CreatedAt.Format("15:04:05"), existingAlert.Status)

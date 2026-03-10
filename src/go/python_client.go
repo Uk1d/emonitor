@@ -206,6 +206,51 @@ func (c *PythonServiceClient) SendEvents(events []*EventJSON) error {
 	return nil
 }
 
+// SendAlert 发送告警到 Python 服务
+func (c *PythonServiceClient) SendAlert(alert *AlertEvent) error {
+	pyAlert := map[string]interface{}{
+		"rule_name":   alert.RuleName,
+		"severity":    alert.Severity,
+		"description": alert.Description,
+		"category":    alert.Category,
+		"timestamp":   alert.Timestamp.Format(time.RFC3339),
+		"status":      "new", // 添加状态字段
+	}
+
+	if alert.Event != nil {
+		pyAlert["pid"] = alert.Event.PID
+		pyAlert["comm"] = alert.Event.Comm
+		pyAlert["uid"] = alert.Event.UID
+		pyAlert["filename"] = alert.Event.Filename
+	}
+
+	reqBody := map[string]interface{}{
+		"alerts": []map[string]interface{}{pyAlert},
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("序列化告警失败: %w", err)
+	}
+
+	resp, err := c.httpClient.Post(
+		c.baseURL+"/api/data/events",
+		"application/json",
+		bytes.NewBuffer(body),
+	)
+	if err != nil {
+		return fmt.Errorf("请求 Python 服务失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Python 服务返回错误状态: %d, 响应: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	return nil
+}
+
 // HealthCheck 检查 Python 服务健康状态
 func (c *PythonServiceClient) HealthCheck() bool {
 	resp, err := c.httpClient.Get(c.baseURL + "/health")

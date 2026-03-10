@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -63,6 +64,9 @@ type WebServer struct {
 
 	// 中间件
 	corsMiddleware *middleware.CORSMiddleware
+
+	// Python服务URL
+	pythonServiceURL string
 }
 
 // EventInfo 事件信息（简化版）
@@ -160,6 +164,7 @@ func (s *WebServer) registerRoutes() {
 	s.mux.HandleFunc("/api/alerts", s.handleAlerts)
 	s.mux.HandleFunc("/api/stats", s.handleStats)
 	s.mux.HandleFunc("/api/attack-chains/graph", s.handleAttackChainGraph)
+	s.mux.HandleFunc("/api/reports/anomalies", s.handleAnomalies)
 	s.mux.HandleFunc("/ws", s.handleWebSocket)
 
 	// 静态资源
@@ -307,19 +312,43 @@ func (s *WebServer) handleMonitorAlert(data map[string]interface{}) {
 		return
 	}
 
+	// 提取ID
+	alertID := fmt.Sprintf("%v", alertData["id"])
+	if alertID == "" || alertID == "<nil>" {
+		return
+	}
+
+	// 提取状态，默认为 new
+	status := "new"
+	if st, ok := alertData["status"].(string); ok && st != "" {
+		status = st
+	}
+
 	alert := &AlertInfo{
-		ID:          fmt.Sprintf("%v", alertData["id"]),
+		ID:          alertID,
 		RuleName:    fmt.Sprintf("%v", alertData["rule_name"]),
 		Severity:    fmt.Sprintf("%v", alertData["severity"]),
 		Description: fmt.Sprintf("%v", alertData["description"]),
 		Timestamp:   fmt.Sprintf("%v", alertData["timestamp"]),
-		Status:      "new",
+		Status:      status,
 	}
 
 	s.eventMu.Lock()
-	s.alertHistory = append(s.alertHistory, alert)
-	if len(s.alertHistory) > 1000 {
-		s.alertHistory = s.alertHistory[len(s.alertHistory)-1000:]
+	// 检查是否已存在相同ID的告警，如果存在则更新，避免重复
+	found := false
+	for i, existing := range s.alertHistory {
+		if existing.ID == alert.ID {
+			s.alertHistory[i] = alert
+			found = true
+			break
+		}
+	}
+	// 如果不存在则添加
+	if !found {
+		s.alertHistory = append(s.alertHistory, alert)
+		if len(s.alertHistory) > 1000 {
+			s.alertHistory = s.alertHistory[len(s.alertHistory)-1000:]
+		}
 	}
 	s.eventMu.Unlock()
 }
@@ -463,6 +492,14 @@ func (s *WebServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.eventMu.RLock()
 	total := s.eventTotal
 	alertCount := len(s.alertHistory)
+
+	// 计算活跃告警数
+	activeCount := 0
+	for _, alert := range s.alertHistory {
+		if alert.Status == "new" || alert.Status == "acknowledged" || alert.Status == "in_progress" {
+			activeCount++
+		}
+	}
 	s.eventMu.RUnlock()
 
 	connected := s.monitorConn != nil
@@ -473,6 +510,7 @@ func (s *WebServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"monitor_url":    s.monitorURL,
 		"event_total":    total,
 		"alert_count":    alertCount,
+		"active_alerts":  activeCount,
 		"uptime_seconds": time.Since(s.startTime).Seconds(),
 		"auth_enabled":   s.authEnabled,
 	})
@@ -508,15 +546,31 @@ func (s *WebServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	s.eventMu.RLock()
 	total := s.eventTotal
 	alertCount := len(s.alertHistory)
+
+	// 计算活跃告警数（状态为 new、acknowledged 或 in_progress）
+	activeCount := 0
+	resolvedCount := 0
+	for _, alert := range s.alertHistory {
+		switch alert.Status {
+		case "new", "acknowledged", "in_progress":
+			activeCount++
+		case "resolved", "false_positive":
+			resolvedCount++
+		}
+	}
 	s.eventMu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"events_total":   total,
-		"alerts_total":   alertCount,
-		"uptime_seconds": time.Since(s.startTime).Seconds(),
-		"start_time":     s.startTime.Format(time.RFC3339),
-		"auth_enabled":   s.authEnabled,
+		"total":           alertCount,
+		"active":          activeCount,
+		"resolved":        resolvedCount,
+		"events_total":    total,
+		"alerts_total":    alertCount,
+		"active_alerts":   activeCount,
+		"uptime_seconds":  time.Since(s.startTime).Seconds(),
+		"start_time":      s.startTime.Format(time.RFC3339),
+		"auth_enabled":    s.authEnabled,
 	})
 }
 
@@ -537,6 +591,64 @@ func (s *WebServer) handleAttackChainGraph(w http.ResponseWriter, r *http.Reques
 		"links":  []interface{}{},
 		"chains": []interface{}{},
 	})
+}
+
+// handleAnomalies 处理AI异常检测数据请求
+// 代理请求到Python服务获取异常数据
+func (s *WebServer) handleAnomalies(w http.ResponseWriter, r *http.Request) {
+	// 从环境变量或默认配置获取Python服务地址
+	pythonURL := s.pythonServiceURL
+	if pythonURL == "" {
+		pythonURL = os.Getenv("PYTHON_SERVICE_URL")
+	}
+	if pythonURL == "" {
+		pythonURL = "http://localhost:9900"
+	}
+
+	// 构建目标URL
+	targetURL := pythonURL + "/api/ai/anomalies"
+
+	// 复制查询参数
+	if r.URL.RawQuery != "" {
+		targetURL += "?" + r.URL.RawQuery
+	}
+
+	// 创建请求
+	req, err := http.NewRequestWithContext(r.Context(), "GET", targetURL, nil)
+	if err != nil {
+		http.Error(w, `{"error": "创建请求失败"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// 设置请求头
+	req.Header.Set("Accept", "application/json")
+
+	// 发送请求
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("获取AI异常数据失败: %v", err)
+		// 返回空数据而不是错误，确保前端正常显示
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"anomalies": []interface{}{},
+			"count":     0,
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	// 读取响应体
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, `{"error": "读取响应失败"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// 设置响应头并返回数据
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	w.Write(body)
 }
 
 func main() {

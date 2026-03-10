@@ -533,6 +533,16 @@ func (api *AlertAPI) handleAlertStats(w http.ResponseWriter, r *http.Request) {
 // 注意：不再使用 since 时间过滤，统计所有告警以确保数据一致性
 func (api *AlertAPI) computeAlertStats() *AlertStats {
 	var stats AlertStats
+
+	// 优先使用内存中的告警管理器统计（实时性更好）
+	if api.alertManager != nil {
+		if m := api.alertManager.GetAlertStats(); m != nil {
+			stats = *m
+			return &stats
+		}
+	}
+
+	// 如果告警管理器不可用，回退到存储统计
 	if api.storage != nil {
 		// 活跃告警：new、acknowledged、in_progress（不限制时间）
 		activeStatuses := []string{string(AlertStatusNew), string(AlertStatusAcknowledged), string(AlertStatusInProgress)}
@@ -584,11 +594,6 @@ func (api *AlertAPI) computeAlertStats() *AlertStats {
 		return &stats
 	}
 
-	// 无存储时，回退到内存统计
-	if m := api.alertManager.GetAlertStats(); m != nil {
-		stats = *m
-		return &stats
-	}
 	return &AlertStats{}
 }
 

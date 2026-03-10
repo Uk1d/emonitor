@@ -600,7 +600,7 @@ def anomaly_to_dict(anomaly: Anomaly) -> Dict:
     """将异常对象转换为字典（用于 JSON 序列化）"""
     return {
         'id': anomaly.id,
-        'type': anomaly.anomaly_type.value,
+        'anomaly_type': anomaly.anomaly_type.value,
         'severity': anomaly.severity.value,
         'confidence': anomaly.confidence,
         'description': anomaly.description,
