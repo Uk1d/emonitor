@@ -1484,15 +1484,50 @@ func main() {
 			alerts := ruleEngine.MatchRules(event)
 
 			// AI 异常检测（异步，避免阻塞主处理流程）
-			// 注意：AI检测的异常只发送到Python服务用于报告生成，不直接创建告警
-			// 这样可以避免与规则引擎告警重复
+			// AI检测到的异常会创建专门的AI检测告警，与规则引擎告警区分开
 			go func(evt *EventJSON) {
 				if anomalyResult, err := pythonClient.DetectEvent(evt); err == nil && anomalyResult != nil {
 					// 检查是否有异常检测结果
 					if anomalyData, ok := (*anomalyResult)["anomaly"].(map[string]interface{}); ok && anomalyData != nil {
 						log.Printf("[*] AI 检测到异常: %s", anomalyData["description"])
-						// AI检测的异常只记录到Python服务，不创建告警
-						// 告警由规则引擎统一处理，避免重复
+
+						// 从异常数据中提取信息创建告警
+						severity, _ := anomalyData["severity"].(string)
+						if severity == "" {
+							severity = "medium"
+						}
+						category, _ := anomalyData["category"].(string)
+						if category == "" {
+							category = "ai_detection"
+						}
+						description, _ := anomalyData["description"].(string)
+						if description == "" {
+							description = "AI检测到异常行为"
+						}
+
+						// 创建AI检测告警事件
+						aiAlert := &AlertEvent{
+							RuleName:    "AI异常检测",
+							Description: description,
+							Severity:    severity,
+							Category:    category,
+							Timestamp:   time.Now(),
+							Event:       evt,
+						}
+
+						// 使用告警管理器处理AI检测告警
+						if managedAlert, err := alertManager.ProcessAlert(*aiAlert); err == nil {
+							log.Printf("[!] AI检测告警已创建: ID=%s, 类别=%s, 严重级别=%s",
+								managedAlert.ID, managedAlert.Category, managedAlert.Severity)
+
+							// WebSocket实时推送
+							if alertAPI != nil {
+								alertAPI.BroadcastAlert(managedAlert)
+							}
+							if wsServer != nil {
+								wsServer.BroadcastAlert(managedAlert)
+							}
+						}
 					}
 				}
 			}(event)
@@ -1510,9 +1545,42 @@ func main() {
 				}
 			}
 
-			// 处理告警事件并检测攻击链
+			// 记录事件处理性能
+			eventProcessingTime := time.Since(eventStartTime)
+			perfMonitor.RecordEvent(eventProcessingTime)
+
+			// 处理告警事件并检测攻击链（合并处理，避免重复）
 			for _, alert := range alerts {
-				// 创建AlertEvent结构体
+				// 更新事件的告警信息
+				event.Severity = alert.Severity
+				event.RuleMatched = alert.RuleName
+
+				// 记录告警性能
+				perfMonitor.RecordAlert(alert.RuleName, eventProcessingTime)
+
+				// 使用告警管理器处理告警
+				managedAlert, err := alertManager.ProcessAlert(alert)
+				if err != nil {
+					log.Printf("告警处理失败: %v", err)
+					perfMonitor.RecordError("alert_processing")
+					continue
+				}
+
+				// 记录详细的告警信息
+				log.Printf("[!] 安全告警已处理: ID=%s, 规则=%s, 严重级别=%s, 状态=%s",
+					managedAlert.ID, managedAlert.RuleName, managedAlert.Severity, managedAlert.Status)
+
+				// WebSocket实时推送（内嵌Web服务）
+				if alertAPI != nil {
+					alertAPI.BroadcastAlert(managedAlert)
+				}
+
+				// WebSocket 实时推送（独立 Web 服务）
+				if wsServer != nil {
+					wsServer.BroadcastAlert(managedAlert)
+				}
+
+				// 创建AlertEvent结构体用于攻击链检测
 				alertEvent := &AlertEvent{
 					RuleName:    alert.RuleName,
 					Description: alert.Description,
@@ -1543,42 +1611,6 @@ func main() {
 						log.Printf("[*] 检测到攻击链: ID=%s, 阶段=%s, 风险级别=%s, 危害评分=%.2f",
 							chain.ID, chain.CurrentStage, chain.RiskLevel, chain.ImpactScore)
 					}
-				}
-			}
-
-			// 记录事件处理性能
-			eventProcessingTime := time.Since(eventStartTime)
-			perfMonitor.RecordEvent(eventProcessingTime)
-
-			// 处理告警事件
-			for _, alert := range alerts {
-				// 更新事件的告警信息
-				event.Severity = alert.Severity
-				event.RuleMatched = alert.RuleName
-
-				// 记录告警性能
-				perfMonitor.RecordAlert(alert.RuleName, eventProcessingTime)
-
-				// 使用告警管理器处理告警
-				managedAlert, err := alertManager.ProcessAlert(alert)
-				if err != nil {
-					log.Printf("告警处理失败: %v", err)
-					perfMonitor.RecordError("alert_processing")
-					continue
-				}
-
-				// 记录详细的告警信息
-				log.Printf("[!] 安全告警已处理: ID=%s, 规则=%s, 严重级别=%s, 状态=%s",
-					managedAlert.ID, managedAlert.RuleName, managedAlert.Severity, managedAlert.Status)
-
-				// WebSocket实时推送（内嵌Web服务）
-				if alertAPI != nil {
-					alertAPI.BroadcastAlert(managedAlert)
-				}
-
-				// WebSocket 实时推送（独立 Web 服务）
-				if wsServer != nil {
-					wsServer.BroadcastAlert(managedAlert)
 				}
 			}
 
