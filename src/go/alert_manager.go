@@ -218,15 +218,15 @@ func (am *AlertManager) ProcessAlert(alertEvent AlertEvent) (*ManagedAlert, erro
 	// 添加到活跃告警
 	am.activeAlerts[managedAlert.ID] = managedAlert
 
-	// 更新统计
-	am.updateStats(managedAlert)
-
-	// 运行处理器
+	// 运行处理器（在更新统计前运行，确保字段被正确初始化）
 	for _, processor := range am.processors {
 		if err := processor.ProcessAlert(managedAlert); err != nil {
 			log.Printf("告警处理器 %s 执行失败: %v", processor.GetProcessorName(), err)
 		}
 	}
+
+	// 更新统计（在处理器之后，确保 Category 等字段已被设置）
+	am.updateStats(managedAlert)
 
 	// 发送通知
 	if am.config.EnableNotifications {
@@ -457,6 +457,9 @@ func (am *AlertManager) aggregateAlert(existingAlert, newAlert *ManagedAlert) (*
 		Message:    fmt.Sprintf("聚合次数: %d", len(existingAlert.ProcessingNotes)),
 		ExecutedAt: time.Now(),
 	}
+
+	// 聚合告警也更新统计（增加总告警数，但不增加活跃告警数）
+	am.stats.TotalAlerts++
 
 	log.Printf("告警已聚合: 现有ID=%s, 新事件时间=%s, 状态=%s",
 		existingAlert.ID, newAlert.CreatedAt.Format("15:04:05"), existingAlert.Status)
