@@ -746,12 +746,19 @@
             }).join('');
         }
 
-        // 格式化时间
+        // 格式化时间 - 显示完整日期和时间
         function formatTime(v) {
             if (!v) return '';
             let d = new Date(v);
             if (isNaN(d)) return String(v);
-            return d.toLocaleTimeString('zh-CN', {hour12: false});
+            // 格式: 2026-3-10 21:27:21
+            const year = d.getFullYear();
+            const month = d.getMonth() + 1;
+            const day = d.getDate();
+            const hours = String(d.getHours()).padStart(2, '0');
+            const minutes = String(d.getMinutes()).padStart(2, '0');
+            const seconds = String(d.getSeconds()).padStart(2, '0');
+            return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
         }
 
         // 显示 Toast 提示
