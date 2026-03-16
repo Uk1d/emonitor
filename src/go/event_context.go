@@ -1404,7 +1404,10 @@ func (ec *EventContext) startBackgroundTasks() {
 		select {
 		case <-cleanupTicker.C:
 			ec.cleanupExpiredContexts()
-		case <-persistTicker.C:
+		case _, ok := <-persistTicker.C:
+			if !ok {
+				continue
+			}
 			if ec.config.EnablePersistence {
 				ec.persistContexts()
 			}

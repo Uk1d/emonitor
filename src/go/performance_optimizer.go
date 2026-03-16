@@ -403,12 +403,21 @@ func (po *PerformanceOptimizer) GetOptimizedRuleCategories(event *EventJSON) []s
 	// 根据事件类型映射到配置文件中的规则类别
 	switch event.EventType {
 	// 文件系统相关事件 -> file 类别
-	case "openat", "open", "write", "read", "unlink", "rename", "chmod", "chown", "close":
+	// 注意：chmod/chown 也属于 permission 类别
+	case "openat", "open", "write", "read", "unlink", "rename":
+		addCategory("file")
+	case "chmod", "chown":
+		addCategory("file")
+		addCategory("permission")
+	case "close":
 		addCategory("file")
 
 	// 进程相关事件 -> process 类别
+	// 注意：execve/execveat 也可能触发 system 和 permission 类别的规则
 	case "execve", "execveat", "fork", "clone", "exit":
 		addCategory("process")
+		addCategory("system")
+		addCategory("permission")  // setcap 等权限相关命令
 
 	// 网络相关事件 -> network 类别
 	case "connect", "accept", "accept4", "sendto", "recvfrom", "bind", "listen", "socket", "shutdown":
@@ -422,10 +431,11 @@ func (po *PerformanceOptimizer) GetOptimizedRuleCategories(event *EventJSON) []s
 	case "mmap", "mprotect", "munmap", "mremap":
 		addCategory("memory")
 
-	// 系统相关事件 -> system 类别（ptrace和kill也属于process类别）
+	// 系统相关事件 -> system 类别（ptrace和kill也属于process和permission类别）
 	case "ptrace", "kill":
 		addCategory("process")
 		addCategory("system")
+		addCategory("permission")
 
 	case "mount", "umount":
 		addCategory("file")

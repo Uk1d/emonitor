@@ -297,7 +297,10 @@ class ReportGenerator:
         return min(timestamps), max(timestamps)
 
     def _parse_timestamp(self, ts: str) -> datetime:
-        """解析时间戳"""
+        """解析时间戳，始终返回naive datetime以避免比较错误"""
+        if not ts:
+            return datetime.now()
+
         # 尝试多种格式
         formats = [
             "%Y-%m-%dT%H:%M:%S.%f%z",
@@ -308,13 +311,21 @@ class ReportGenerator:
 
         for fmt in formats:
             try:
-                return datetime.strptime(ts, fmt)
+                dt = datetime.strptime(ts, fmt)
+                # 转换为naive datetime
+                if dt.tzinfo is not None:
+                    dt = dt.replace(tzinfo=None)
+                return dt
             except ValueError:
                 continue
 
         # ISO 格式
         try:
-            return datetime.fromisoformat(ts.replace('Z', '+00:00'))
+            dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+            # 转换为naive datetime
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+            return dt
         except:
             return datetime.now()
 

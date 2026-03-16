@@ -234,7 +234,7 @@ func (c *PythonServiceClient) SendAlert(alert *AlertEvent) error {
 	}
 
 	resp, err := c.httpClient.Post(
-		c.baseURL+"/api/data/events",
+		c.baseURL+"/api/alerts",
 		"application/json",
 		bytes.NewBuffer(body),
 	)

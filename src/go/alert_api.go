@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -534,6 +535,10 @@ func (api *AlertAPI) handleAlertStats(w http.ResponseWriter, r *http.Request) {
 func (api *AlertAPI) computeAlertStats() *AlertStats {
 	var stats AlertStats
 
+	// 获取事件总数
+	eventTotal, _ := api.getEventTotals()
+	stats.TotalEvents = eventTotal
+
 	// 当有存储时，优先使用存储统计（确保数据一致性，特别是Web服务独立运行时）
 	// 内存中的告警管理器统计仅作为后备
 	if api.storage != nil {
@@ -590,6 +595,8 @@ func (api *AlertAPI) computeAlertStats() *AlertStats {
 	// 没有存储时，回退到内存中的告警管理器统计
 	if api.alertManager != nil {
 		if m := api.alertManager.GetAlertStats(); m != nil {
+			// 补充事件总数
+			m.TotalEvents = eventTotal
 			return m
 		}
 	}
@@ -805,11 +812,15 @@ func (api *AlertAPI) handleGenerateReport(w http.ResponseWriter, r *http.Request
 		reportFormat = "json"
 	}
 
-	// 调用 Python 服务生成报告
-	reportData, contentType, err := api.pythonClient.GenerateReport(reportFormat)
+	// 直接从Go端获取数据生成报告
+	reportData, contentType, err := api.generateLocalReport(reportFormat)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("生成报告失败: %v", err), http.StatusInternalServerError)
-		return
+		// 如果本地生成失败，尝试使用Python服务
+		reportData, contentType, err = api.pythonClient.GenerateReport(reportFormat)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("生成报告失败: %v", err), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// 设置响应头
@@ -827,6 +838,184 @@ func (api *AlertAPI) handleGenerateReport(w http.ResponseWriter, r *http.Request
 	}
 
 	w.Write(reportData)
+}
+
+// generateLocalReport 直接从Go端生成报告
+func (api *AlertAPI) generateLocalReport(format string) ([]byte, string, error) {
+	// 获取告警统计
+	stats := api.alertManager.GetAlertStats()
+
+	// 获取活跃告警
+	activeAlerts := api.alertManager.GetActiveAlerts(nil)
+
+	// 获取攻击链
+	var chains []*AttackChain
+	if api.eventContext != nil {
+		chains = api.eventContext.GetAttackChains()
+	}
+
+	// 获取事件总数
+	eventTotal, _ := api.getEventTotals()
+
+	// 构建报告数据
+	criticalCount := stats.SeverityDistribution["critical"]
+	highCount := stats.SeverityDistribution["high"]
+
+	report := map[string]interface{}{
+		"generated_at": time.Now().Format(time.RFC3339),
+		"summary": map[string]interface{}{
+			"total_events":      int(eventTotal),
+			"total_alerts":      int(stats.TotalAlerts),
+			"total_anomalies":   0, // Go端不直接存储AI异常
+			"active_alerts":     int(stats.ActiveAlerts),
+			"resolved_alerts":   int(stats.ResolvedAlerts),
+			"critical_alerts":   int(criticalCount),
+			"high_alerts":      int(highCount),
+			"attack_chains":    len(chains),
+		},
+		"alerts":           activeAlerts,
+		"attack_chains":    chains,
+		"severity_distribution": stats.SeverityDistribution,
+		"category_distribution": stats.CategoryDistribution,
+	}
+
+	switch format {
+	case "html":
+		return generateHTMLReport(report), "text/html; charset=utf-8", nil
+	case "csv":
+		return generateCSVReport(activeAlerts), "text/csv; charset=utf-8-sig", nil
+	default:
+		data, err := json.Marshal(report)
+		if err != nil {
+			return nil, "", err
+		}
+		return data, "application/json", nil
+	}
+}
+
+// generateHTMLReport 生成HTML格式报告
+func generateHTMLReport(report map[string]interface{}) []byte {
+	summary := report["summary"].(map[string]interface{})
+	alerts := report["alerts"].([]*ManagedAlert)
+
+	html := `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>安全检测报告</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; }
+        h1 { color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px; }
+        .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 20px 0; }
+        .summary-card { background: #f9f9f9; padding: 15px; border-radius: 5px; text-align: center; }
+        .summary-card .number { font-size: 32px; font-weight: bold; color: #4CAF50; }
+        .summary-card .label { color: #666; margin-top: 5px; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background: #4CAF50; color: white; }
+        .severity-critical { color: #d32f2f; font-weight: bold; }
+        .severity-high { color: #f57c00; font-weight: bold; }
+        .severity-medium { color: #fbc02d; }
+        .severity-low { color: #4CAF50; }
+        .footer { margin-top: 30px; text-align: center; color: #999; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>安全检测报告</h1>
+        <p>生成时间: ` + time.Now().Format("2006-01-02 15:04:05") + `</p>
+
+        <div class="summary">
+            <div class="summary-card">
+                <div class="number">` + fmt.Sprintf("%d", summary["total_alerts"]) + `</div>
+                <div class="label">总告警数</div>
+            </div>
+            <div class="summary-card">
+                <div class="number">` + fmt.Sprintf("%d", summary["active_alerts"]) + `</div>
+                <div class="label">活跃告警</div>
+            </div>
+            <div class="summary-card">
+                <div class="number">` + fmt.Sprintf("%d", summary["resolved_alerts"]) + `</div>
+                <div class="label">已解决</div>
+            </div>
+            <div class="summary-card">
+                <div class="number">` + fmt.Sprintf("%d", summary["attack_chains"]) + `</div>
+                <div class="label">攻击链</div>
+            </div>
+        </div>
+
+        <h2>告警列表</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>时间</th>
+                    <th>规则</th>
+                    <th>严重级别</th>
+                    <th>类别</th>
+                    <th>描述</th>
+                </tr>
+            </thead>
+            <tbody>`
+
+	for _, alert := range alerts {
+		severityClass := "severity-" + alert.Severity
+		html += fmt.Sprintf(`<tr>
+                <td>%s</td>
+                <td>%s</td>
+                <td class="%s">%s</td>
+                <td>%s</td>
+                <td>%s</td>
+            </tr>`,
+			alert.CreatedAt.Format("2006-01-02 15:04:05"),
+			alert.RuleName,
+			severityClass,
+			alert.Severity,
+			alert.Category,
+			alert.Description,
+		)
+	}
+
+	html += `</tbody>
+        </table>
+
+        <div class="footer">
+            <p>由 eTracee Linux 入侵检测系统生成</p>
+        </div>
+    </div>
+</body>
+</html>`
+
+	return []byte(html)
+}
+
+// generateCSVReport 生成CSV格式报告
+func generateCSVReport(alerts []*ManagedAlert) []byte {
+	var buf bytes.Buffer
+	buf.WriteString("\xEF\xBB\xBF") // UTF-8 BOM
+	buf.WriteString("时间,规则,严重级别,类别,描述,PID,用户ID\n")
+
+	for _, alert := range alerts {
+		desc := strings.ReplaceAll(alert.Description, ",", ";")
+		desc = strings.ReplaceAll(desc, "\n", " ")
+		pid := 0
+		uid := 0
+		if alert.Event != nil {
+			pid = int(alert.Event.PID)
+			uid = int(alert.Event.UID)
+		}
+		buf.WriteString(fmt.Sprintf("%s,%s,%s,%s,%s,%d,%d\n",
+			alert.CreatedAt.Format("2006-01-02 15:04:05"),
+			alert.RuleName,
+			alert.Severity,
+			alert.Category,
+			desc,
+			pid,
+			uid,
+		))
+	}
+
+	return buf.Bytes()
 }
 
 // handleGetAnomalies 处理获取 AI 异常列表请求

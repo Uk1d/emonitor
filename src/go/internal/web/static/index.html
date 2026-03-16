@@ -366,13 +366,13 @@
         const TOAST_DURATION = 5000;   // Toast 显示时长（毫秒）
         const EPS_WINDOW = 5000;       // 事件速率计算窗口（毫秒）
 
-        // 应用状态
+        // 应用状态（从本地存储恢复事件计数，避免刷新后重置为0）
         let state = {
             alerts: [],                 // 告警列表
             events: [],                 // 事件列表
             anomalies: [],              // AI 异常列表
             stats: { total: 0, active: 0, resolved: 0, eps: 0 },  // 统计数据
-            eventCount: 0,              // 事件计数
+            eventCount: parseInt(localStorage.getItem('etracee_event_count') || '0'),  // 事件计数（持久化）
             lastEventTime: Date.now(),  // 最后事件时间
             ws: null,                   // WebSocket 连接
             connected: false            // 连接状态
@@ -591,13 +591,16 @@
                     } else {
                         state.eventCount++;
                     }
+                    // 持久化事件计数到本地存储
+                    localStorage.setItem('etracee_event_count', state.eventCount.toString());
                     state.lastEventTime = Date.now();
                     break;
                 case 'events_snapshot':
                     state.events = msg.data || [];
-                    // 使用后端发送的总事件数初始化
+                    // 使用后端发送的总事件数初始化，并持久化
                     if (msg.total_all !== undefined) {
                         state.eventCount = msg.total_all;
+                        localStorage.setItem('etracee_event_count', state.eventCount.toString());
                     }
                     renderEvents();
                     break;

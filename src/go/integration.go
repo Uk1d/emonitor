@@ -59,9 +59,9 @@ func (it *IntegrationTest) RunIntegrationTests() error {
 		result := test()
 		it.testResults = append(it.testResults, result)
 
-    status := "[+] PASS"
+		status := "[+] PASS"
 		if !result.Passed {
-			status = "✗ FAIL"
+			status = "[-] FAIL"
 		}
 		log.Printf("[%s] %s (耗时: %v)", status, result.TestName, result.Duration)
 

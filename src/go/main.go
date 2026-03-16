@@ -1485,10 +1485,20 @@ func main() {
 
 			// AI 异常检测（异步，避免阻塞主处理流程）
 			// AI检测到的异常会创建专门的AI检测告警，与规则引擎告警区分开
+			// 注意：AI检测是独立的，不影响原始规则引擎的结果
 			go func(evt *EventJSON) {
-				if anomalyResult, err := pythonClient.DetectEvent(evt); err == nil && anomalyResult != nil {
-					// 检查是否有异常检测结果
-					if anomalyData, ok := (*anomalyResult)["anomaly"].(map[string]interface{}); ok && anomalyData != nil {
+				anomalyResult, err := pythonClient.DetectEvent(evt)
+				if err != nil {
+					// AI检测失败时静默处理，不影响主流程
+					// 原始规则引擎的告警已经同步处理，不依赖AI检测结果
+					log.Printf("[*] AI检测服务暂时不可用: %v", err)
+					return
+				}
+				if anomalyResult == nil {
+					return
+				}
+				// 检查是否有异常检测结果
+				if anomalyData, ok := (*anomalyResult)["anomaly"].(map[string]interface{}); ok && anomalyData != nil {
 						log.Printf("[*] AI 检测到异常: %s", anomalyData["description"])
 
 						// 从异常数据中提取信息创建告警
@@ -1529,7 +1539,6 @@ func main() {
 							}
 						}
 					}
-				}
 			}(event)
 
 			// 更新事件上下文（用于攻击链重建）

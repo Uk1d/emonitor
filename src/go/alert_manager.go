@@ -130,6 +130,7 @@ type NotificationChannel interface {
 // AlertStats 告警统计
 type AlertStats struct {
 	TotalAlerts           uint64            `json:"total"`
+	TotalEvents           uint64            `json:"total_events"` // 事件总数
 	ActiveAlerts          uint64            `json:"active"`
 	ResolvedAlerts        uint64            `json:"resolved"`
 	FalsePositives        uint64            `json:"false_positives"`
@@ -636,6 +637,9 @@ func (am *AlertManager) autoResolveTimeoutAlerts() {
 			// 移动到历史记录
 			am.alertHistory = append(am.alertHistory, *alert)
 			delete(am.activeAlerts, id)
+
+			// 更新统计
+			am.stats.ResolvedAlerts++
 
 			resolvedCount++
 		}

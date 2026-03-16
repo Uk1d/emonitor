@@ -6,6 +6,7 @@ eTracee Python 后端服务
 import json
 import os
 import sys
+import requests
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -17,6 +18,9 @@ from flask_cors import CORS
 
 from ai_detector import AIDetector, AIDetectorConfig, anomaly_to_dict
 from report_generator import ReportGenerator, ReportGeneratorConfig
+
+# Go 服务地址（通过环境变量配置，默认本地8888端口）
+GO_SERVICE_URL = os.environ.get('GO_SERVICE_URL', 'http://127.0.0.1:8888')
 
 app = Flask(__name__)
 # 限制 CORS 来源以避免频繁的外部访问
@@ -185,13 +189,41 @@ def generate_report():
     try:
         format_type = request.args.get('format', 'json')
 
-        # 从缓冲区获取数据
-        events = events_buffer[-report_generator.config.max_events:]
-        alerts = alerts_buffer[-report_generator.config.max_alerts:]
+        # 优先从Go服务获取事件和告警数据，如果失败则使用本地缓冲区
+        events = []
+        alerts = []
+
+        try:
+            # 从Go服务获取告警数据
+            alerts_resp = requests.get(f"{GO_SERVICE_URL}/api/alerts?page=1&page_size=500", timeout=5)
+            if alerts_resp.status_code == 200:
+                alerts_data = alerts_resp.json()
+                alerts = alerts_data.get('alerts', [])
+                app.logger.info(f"从Go服务获取到 {len(alerts)} 条告警")
+        except Exception as e:
+            app.logger.warning(f"从Go服务获取告警失败，使用本地缓冲区: {e}")
+            # 回退到本地缓冲区
+            alerts = alerts_buffer[-report_generator.config.max_alerts:]
+
+        try:
+            # 从Go服务获取事件数据
+            events_resp = requests.get(f"{GO_SERVICE_URL}/api/events?page=1&page_size=1000", timeout=5)
+            if events_resp.status_code == 200:
+                events_data = events_resp.json()
+                events = events_data.get('events', [])
+                app.logger.info(f"从Go服务获取到 {len(events)} 条事件")
+        except Exception as e:
+            app.logger.warning(f"从Go服务获取事件失败，使用本地缓冲区: {e}")
+            # 回退到本地缓冲区
+            events = events_buffer[-report_generator.config.max_events:]
+
         # 从 AI 检测器获取异常
         anomalies = [anomaly_to_dict(a)
                    for a in ai_detector.get_recent_anomalies(500)]
         chains = attack_chains_buffer
+
+        # 记录用于生成报告的数据量
+        app.logger.info(f"生成报告数据: {len(events)} 事件, {len(alerts)} 告警, {len(anomalies)} 异常")
 
         # 生成报告
         report_data = report_generator.generate_report(

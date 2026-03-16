@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -165,6 +166,7 @@ func (s *WebServer) registerRoutes() {
 	s.mux.HandleFunc("/api/stats", s.handleStats)
 	s.mux.HandleFunc("/api/attack-chains/graph", s.handleAttackChainGraph)
 	s.mux.HandleFunc("/api/reports/anomalies", s.handleAnomalies)
+	s.mux.HandleFunc("/api/reports/generate", s.handleGenerateReport)
 	s.mux.HandleFunc("/ws", s.handleWebSocket)
 
 	// 静态资源
@@ -312,24 +314,39 @@ func (s *WebServer) handleMonitorAlert(data map[string]interface{}) {
 		return
 	}
 
-	// 提取ID
-	alertID := fmt.Sprintf("%v", alertData["id"])
-	if alertID == "" || alertID == "<nil>" {
+	// 提取ID（支持大小写字段名）
+	alertID := ""
+	if id, ok := alertData["id"].(string); ok && id != "" {
+		alertID = id
+	} else if id, ok := alertData["ID"].(string); ok && id != "" {
+		alertID = id
+	}
+	if alertID == "" {
 		return
 	}
 
+	// 提取字段（支持大小写下划线等多种格式）
+	getString := func(keys ...string) string {
+		for _, k := range keys {
+			if v, ok := alertData[k].(string); ok {
+				return v
+			}
+		}
+		return ""
+	}
+
 	// 提取状态，默认为 new
-	status := "new"
-	if st, ok := alertData["status"].(string); ok && st != "" {
-		status = st
+	status := getString("status", "Status", "Status")
+	if status == "" {
+		status = "new"
 	}
 
 	alert := &AlertInfo{
 		ID:          alertID,
-		RuleName:    fmt.Sprintf("%v", alertData["rule_name"]),
-		Severity:    fmt.Sprintf("%v", alertData["severity"]),
-		Description: fmt.Sprintf("%v", alertData["description"]),
-		Timestamp:   fmt.Sprintf("%v", alertData["timestamp"]),
+		RuleName:    getString("rule_name", "RuleName", "ruleName"),
+		Severity:    getString("severity", "Severity"),
+		Description: getString("description", "Description"),
+		Timestamp:   getString("timestamp", "Timestamp", "CreatedAt"),
 		Status:      status,
 	}
 
@@ -649,6 +666,213 @@ func (s *WebServer) handleAnomalies(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	w.Write(body)
+}
+
+// handleGenerateReport 处理报告生成请求
+// 直接从本地存储获取数据生成报告
+func (s *WebServer) handleGenerateReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 获取报告格式参数
+	reportFormat := r.URL.Query().Get("format")
+	if reportFormat == "" {
+		reportFormat = "json"
+	}
+
+	// 获取存储中的告警数据
+	alerts := s.getStoredAlerts()
+
+	// 统计告警
+	totalAlerts := len(alerts)
+	activeAlerts := 0
+	resolvedAlerts := 0
+	criticalCount := 0
+	highCount := 0
+	severityMap := make(map[string]int)
+
+	for _, alert := range alerts {
+		if alert.Status == "resolved" {
+			resolvedAlerts++
+		} else {
+			activeAlerts++
+		}
+		severityMap[alert.Severity]++
+		switch alert.Severity {
+		case "critical":
+			criticalCount++
+		case "high":
+			highCount++
+		}
+	}
+
+	// 构建报告数据
+	report := map[string]interface{}{
+		"generated_at": time.Now().Format(time.RFC3339),
+		"summary": map[string]interface{}{
+			"total_events":      totalAlerts,
+			"total_alerts":      totalAlerts,
+			"total_anomalies":   0,
+			"active_alerts":     activeAlerts,
+			"resolved_alerts":   resolvedAlerts,
+			"critical_alerts":   criticalCount,
+			"high_alerts":      highCount,
+			"attack_chains":    0,
+		},
+		"alerts":               alerts,
+		"severity_distribution": severityMap,
+	}
+
+	// 根据格式生成响应
+	switch reportFormat {
+	case "html":
+		s.serveHTMLReport(w, report)
+	case "csv":
+		s.serveCSVReport(w, alerts)
+	default:
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", `attachment; filename="eTracee-report-`+time.Now().Format("2006-01-02-15-04-05")+`.json"`)
+		json.NewEncoder(w).Encode(report)
+	}
+}
+
+// getStoredAlerts 从存储获取告警列表
+func (s *WebServer) getStoredAlerts() []*AlertInfo {
+	// 首先尝试从数据库存储获取
+	if s.storage != nil {
+		alerts, err := s.storage.GetAlerts(1000, 0)
+		if err == nil && len(alerts) > 0 {
+			return alerts
+		}
+	}
+	// 如果存储不可用，使用内存中的历史记录
+	return s.alertHistory
+}
+
+// serveHTMLReport 生成并服务HTML报告
+func (s *WebServer) serveHTMLReport(w http.ResponseWriter, report map[string]interface{}) {
+	summary := report["summary"].(map[string]interface{})
+	alerts := report["alerts"].([]*AlertInfo)
+
+	html := `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>安全检测报告</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; }
+        h1 { color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px; }
+        .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 20px 0; }
+        .summary-card { background: #f9f9f9; padding: 15px; border-radius: 5px; text-align: center; }
+        .summary-card .number { font-size: 32px; font-weight: bold; color: #4CAF50; }
+        .summary-card .label { color: #666; margin-top: 5px; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background: #4CAF50; color: white; }
+        .severity-critical { color: #d32f2f; font-weight: bold; }
+        .severity-high { color: #f57c00; font-weight: bold; }
+        .severity-medium { color: #fbc02d; }
+        .severity-low { color: #4CAF50; }
+        .footer { margin-top: 30px; text-align: center; color: #999; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>安全检测报告</h1>
+        <p>生成时间: ` + time.Now().Format("2006-01-02 15:04:05") + `</p>
+
+        <div class="summary">
+            <div class="summary-card">
+                <div class="number">` + fmt.Sprintf("%d", summary["total_alerts"]) + `</div>
+                <div class="label">总告警数</div>
+            </div>
+            <div class="summary-card">
+                <div class="number">` + fmt.Sprintf("%d", summary["active_alerts"]) + `</div>
+                <div class="label">活跃告警</div>
+            </div>
+            <div class="summary-card">
+                <div class="number">` + fmt.Sprintf("%d", summary["resolved_alerts"]) + `</div>
+                <div class="label">已解决</div>
+            </div>
+            <div class="summary-card">
+                <div class="number">` + fmt.Sprintf("%d", summary["attack_chains"]) + `</div>
+                <div class="label">攻击链</div>
+            </div>
+        </div>
+
+        <h2>告警列表</h2>`
+
+	if len(alerts) == 0 {
+		html += `<p style="text-align:center;color:#999;">暂无告警数据</p>`
+	} else {
+		html += `<table>
+            <thead>
+                <tr>
+                    <th>时间</th>
+                    <th>规则</th>
+                    <th>严重级别</th>
+                    <th>状态</th>
+                    <th>描述</th>
+                </tr>
+            </thead>
+            <tbody>`
+
+		for _, alert := range alerts {
+			severityClass := "severity-" + alert.Severity
+			html += fmt.Sprintf(`<tr>
+                <td>%s</td>
+                <td>%s</td>
+                <td class="%s">%s</td>
+                <td>%s</td>
+                <td>%s</td>
+            </tr>`,
+				alert.Timestamp,
+				alert.RuleName,
+				severityClass,
+				alert.Severity,
+				alert.Status,
+				alert.Description,
+			)
+		}
+		html += `</tbody></table>`
+	}
+
+	html += `<div class="footer">
+            <p>由 eTracee Linux 入侵检测系统生成</p>
+        </div>
+    </div>
+</body>
+</html>`
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="eTracee-report-`+time.Now().Format("2006-01-02-15-04-05")+`.html"`)
+	w.Write([]byte(html))
+}
+
+// serveCSVReport 生成并服务CSV报告
+func (s *WebServer) serveCSVReport(w http.ResponseWriter, alerts []*AlertInfo) {
+	var buf bytes.Buffer
+	buf.WriteString("\xEF\xBB\xBF") // UTF-8 BOM
+	buf.WriteString("时间,规则,严重级别,状态,描述\n")
+
+	for _, alert := range alerts {
+		desc := strings.ReplaceAll(alert.Description, ",", ";")
+		desc = strings.ReplaceAll(desc, "\n", " ")
+		buf.WriteString(fmt.Sprintf("%s,%s,%s,%s,%s\n",
+			alert.Timestamp,
+			alert.RuleName,
+			alert.Severity,
+			alert.Status,
+			desc,
+		))
+	}
+
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8-sig")
+	w.Header().Set("Content-Disposition", `attachment; filename="eTracee-report-`+time.Now().Format("2006-01-02-15-04-05")+`.csv"`)
+	w.Write(buf.Bytes())
 }
 
 func main() {
