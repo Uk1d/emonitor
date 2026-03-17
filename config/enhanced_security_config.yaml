@@ -572,7 +572,76 @@ detection_rules:
         - log
       category: process
 
+    # 检测root用户执行敏感命令读取文件
+    - name: Root read sensitive file
+      description: |
+        root用户使用敏感命令读取系统文件，可能是异常行为。
+        MITRE ATT&CK: T1555 - Credentials from Password Stores
+      conditions:
+        - event_type: process_create
+        - comm: "regex:^(cat|head|tail|less|more|grep|awk|vim|nano|strings|xxd|file|stat)$"
+        - uid: 0
+      severity: medium
+      logic_operator: AND
+      tags:
+        - maturity_stable
+        - host
+        - process
+        - mitre_credential_access
+        - T1555
+      enabled: true
+      throttle_seconds: 60
+      actions:
+        - log
+      category: process
+
     # ----- 敏感命令检测 -----
+    - name: Read sensitive system files
+      description: |
+        读取敏感系统文件，如密码文件、组文件等。
+        攻击者常通过读取这些文件来收集系统信息或进行凭据窃取。
+        MITRE ATT&CK: T1555 - Credentials from Password Stores
+      conditions:
+        - event_type: process_create
+        - comm: "regex:^(cat|head|tail|less|more|grep|awk|vim|nano|strings|xxd)$"
+        - cmdline: "regex:.*(/etc/passwd|/etc/shadow|/etc/group|/etc/gshadow|/etc/sudoers).*"
+      severity: medium
+      logic_operator: AND
+      tags:
+        - maturity_stable
+        - host
+        - process
+        - mitre_credential_access
+        - T1555
+      enabled: true
+      throttle_seconds: 60
+      actions:
+        - log
+      category: process
+
+    # 检测 /tmp 目录下执行脚本和可执行文件
+    - name: Execution from /tmp
+      description: |
+        在 /tmp 目录下执行脚本或可执行文件，这通常是恶意软件或攻击者常用的行为。
+        攻击者常利用 /tmp 目录存放和执行恶意代码，因为该目录通常可写且不被监控。
+        MITRE ATT&CK: T1059 - Command and Scripting Interpreter
+      conditions:
+        - event_type: process_create
+        - comm: "regex:^(bash|sh|python|python3|perl|ruby|php|node|lua|tcl|expect)$"
+        - cmdline: "regex:^.*(/tmp|/var/tmp|/dev/shm).*"
+      severity: medium
+      logic_operator: AND
+      tags:
+        - maturity_stable
+        - host
+        - process
+        - mitre_execution
+      enabled: true
+      throttle_seconds: 60
+      actions:
+        - log
+      category: process
+
     - name: Password file manipulation
       description: |
         操作密码相关文件，可能是添加后门账户或修改认证配置。

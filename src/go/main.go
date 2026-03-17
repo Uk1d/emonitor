@@ -404,19 +404,49 @@ func enrichEventCmdline(event *EventJSON) {
 	if runtime.GOOS != "linux" {
 		return
 	}
-	// 仅在进程类事件中尝试填充，避免无意义的开销
+	// 为所有进程相关事件尝试填充命令行参数
+	// 这些事件都可能包含重要的命令行信息，用于规则匹配
 	switch event.EventType {
-	case "execve", "fork", "clone", "exit":
+	case "execve", "execveat", "fork", "clone", "exit",
+		"setuid", "setgid", "setreuid", "setregid", "setresuid", "setresgid",
+		"prctl", "ptrace", "kill", "mmap", "mprotect", "munmap", "mremap",
+		"mount", "umount", "init_module", "delete_module", "setns", "unshare",
+		"chmod", "chown", "unlink", "rename", "openat", "close", "read", "write",
+		"connect", "bind", "listen", "accept", "sendto", "recvfrom", "socket", "shutdown":
 		// 读取cmdline（以\0分隔），转换为空格分隔的字符串
 		path := fmt.Sprintf("/proc/%d/cmdline", event.PID)
 		data, err := os.ReadFile(path)
-		if err != nil || len(data) == 0 {
+		if err != nil {
+			return
+		}
+		if len(data) == 0 {
 			return
 		}
 		s := strings.ReplaceAll(string(data), "\x00", " ")
 		s = strings.TrimSpace(s)
 		if s != "" {
 			event.Cmdline = s
+			// 对于 execve/execveat 事件
+			// 如果原始 filename 是相对路径（如 "bash"），尝试从 cmdline 中查找实际路径
+			// 这样可以正确匹配如 /tmp/.* 这类规则
+			if event.EventType == "execve" || event.EventType == "execveat" {
+				parts := strings.Fields(s)
+				if len(parts) > 0 {
+					// 原始 filename 是相对路径
+					if len(event.Filename) > 0 && event.Filename[0] != '/' {
+						// 从 cmdline 中查找是否有绝对路径（第二个参数可能是实际脚本路径）
+						for i := 1; i < len(parts); i++ {
+							if strings.HasPrefix(parts[i], "/") {
+								event.Filename = parts[i]
+								break
+							}
+						}
+					} else if len(event.Filename) == 0 {
+						// 如果原始 filename 为空，使用第一个参数
+						event.Filename = parts[0]
+					}
+				}
+			}
 		}
 	}
 }
@@ -529,15 +559,15 @@ func main() {
 
 	// 命令行参数解析
 	var (
-		configPath    = flag.String("config", "config/enhanced_security_config.yaml", "安全规则配置文件路径")
-		dashboard     = flag.Bool("dashboard", false, "启用命令行Dashboard")
-		pidMin        = flag.Uint("pid-min", 0, "过滤PID最小值")
-		pidMax        = flag.Uint("pid-max", 0, "过滤PID最大值")
-		uidMin        = flag.Uint("uid-min", 0, "过滤UID最小值")
-		uidMax        = flag.Uint("uid-max", 0, "过滤UID最大值")
-		monitorOnly   = flag.Bool("monitor-only", false, "仅运行监控模式（无Web界面，用于与独立Web服务配合）")
-		webPort       = flag.Int("web-port", 8888, "Web服务端口（仅在非monitor-only模式下使用）")
-		wsPort        = flag.Int("ws-port", 8889, "WebSocket服务端口（供独立Web服务连接）")
+		configPath  = flag.String("config", "config/enhanced_security_config.yaml", "安全规则配置文件路径")
+		dashboard   = flag.Bool("dashboard", false, "启用命令行Dashboard")
+		pidMin      = flag.Uint("pid-min", 0, "过滤PID最小值")
+		pidMax      = flag.Uint("pid-max", 0, "过滤PID最大值")
+		uidMin      = flag.Uint("uid-min", 0, "过滤UID最小值")
+		uidMax      = flag.Uint("uid-max", 0, "过滤UID最大值")
+		monitorOnly = flag.Bool("monitor-only", false, "仅运行监控模式（无Web界面，用于与独立Web服务配合）")
+		webPort     = flag.Int("web-port", 8888, "Web服务端口（仅在非monitor-only模式下使用）")
+		wsPort      = flag.Int("ws-port", 8889, "WebSocket服务端口（供独立Web服务连接）")
 	)
 	flag.Parse()
 
@@ -787,7 +817,6 @@ func main() {
 			break
 		}
 	}
-
 
 	if !configLoaded {
 		log.Println("[!] 警告: 未能加载任何安全规则配置文件，将使用默认配置但不包含检测规则")
@@ -1499,46 +1528,46 @@ func main() {
 				}
 				// 检查是否有异常检测结果
 				if anomalyData, ok := (*anomalyResult)["anomaly"].(map[string]interface{}); ok && anomalyData != nil {
-						log.Printf("[*] AI 检测到异常: %s", anomalyData["description"])
+					log.Printf("[*] AI 检测到异常: %s", anomalyData["description"])
 
-						// 从异常数据中提取信息创建告警
-						severity, _ := anomalyData["severity"].(string)
-						if severity == "" {
-							severity = "medium"
-						}
-						category, _ := anomalyData["category"].(string)
-						if category == "" {
-							category = "ai_detection"
-						}
-						description, _ := anomalyData["description"].(string)
-						if description == "" {
-							description = "AI检测到异常行为"
-						}
+					// 从异常数据中提取信息创建告警
+					severity, _ := anomalyData["severity"].(string)
+					if severity == "" {
+						severity = "medium"
+					}
+					category, _ := anomalyData["category"].(string)
+					if category == "" {
+						category = "ai_detection"
+					}
+					description, _ := anomalyData["description"].(string)
+					if description == "" {
+						description = "AI检测到异常行为"
+					}
 
-						// 创建AI检测告警事件
-						aiAlert := &AlertEvent{
-							RuleName:    "AI异常检测",
-							Description: description,
-							Severity:    severity,
-							Category:    category,
-							Timestamp:   time.Now(),
-							Event:       evt,
+					// 创建AI检测告警事件
+					aiAlert := &AlertEvent{
+						RuleName:    "AI异常检测",
+						Description: description,
+						Severity:    severity,
+						Category:    category,
+						Timestamp:   time.Now(),
+						Event:       evt,
+					}
+
+					// 使用告警管理器处理AI检测告警
+					if managedAlert, err := alertManager.ProcessAlert(*aiAlert); err == nil {
+						log.Printf("[!] AI检测告警已创建: ID=%s, 类别=%s, 严重级别=%s",
+							managedAlert.ID, managedAlert.Category, managedAlert.Severity)
+
+						// WebSocket实时推送
+						if alertAPI != nil {
+							alertAPI.BroadcastAlert(managedAlert)
 						}
-
-						// 使用告警管理器处理AI检测告警
-						if managedAlert, err := alertManager.ProcessAlert(*aiAlert); err == nil {
-							log.Printf("[!] AI检测告警已创建: ID=%s, 类别=%s, 严重级别=%s",
-								managedAlert.ID, managedAlert.Category, managedAlert.Severity)
-
-							// WebSocket实时推送
-							if alertAPI != nil {
-								alertAPI.BroadcastAlert(managedAlert)
-							}
-							if wsServer != nil {
-								wsServer.BroadcastAlert(managedAlert)
-							}
+						if wsServer != nil {
+							wsServer.BroadcastAlert(managedAlert)
 						}
 					}
+				}
 			}(event)
 
 			// 更新事件上下文（用于攻击链重建）

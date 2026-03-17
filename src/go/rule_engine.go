@@ -295,7 +295,13 @@ func (e *EnhancedRuleEngine) compileCondition(condition map[string]interface{}) 
 	for field, value := range condition {
 		cond.Field = field
 
-		switch v := value.(type) {
+		// 对于 event_type 字段，将 Falco/Tracee 格式的事件类型别名转换为内部事件类型
+		processedValue := value
+		if field == "event_type" {
+			processedValue = convertEventTypeValue(value)
+		}
+
+		switch v := processedValue.(type) {
 		case string:
 			// 解析操作符和值
 			if strings.HasPrefix(v, "regex:") {
@@ -766,6 +772,103 @@ func matchEventType(eventType string, expected interface{}) bool {
 	return false
 }
 
+// convertEventTypeValue 将事件类型别名转换为内部事件类型
+// 用于在规则编译时预处理条件值
+func convertEventTypeValue(value interface{}) interface{} {
+	// 事件类型别名映射表
+	aliases := map[string]string{
+		"open":            "openat",
+		"openat2":         "openat",
+		"execveat":        "execve",
+		"vfork":           "fork",
+		"clone3":          "clone",
+		"accept4":         "accept",
+		"accept_conn":     "accept",
+		"connect_unix":    "connect",
+		"connect_tcp":     "connect",
+		"sendmsg":         "sendto",
+		"recvmsg":         "recvfrom",
+		"fstat":           "stat",
+		"lstat":           "stat",
+		"newfstatat":      "stat",
+		"statx":           "stat",
+		"fchown":          "chown",
+		"lchown":          "chown",
+		"fchmod":          "chmod",
+		"unlinkat":        "unlink",
+		"renameat":        "rename",
+		"renameat2":       "rename",
+		"umount":          "umount2",
+		"finit_module":    "init_module",
+		"process_create":  "execve",
+		"file_open":       "openat",
+		"file_delete":     "unlink",
+		"file_modify":     "write",
+		"network_connect": "connect",
+	}
+
+	mapEventType := func(eventType string) string {
+		if mapped, ok := aliases[eventType]; ok {
+			return mapped
+		}
+		return eventType
+	}
+
+	switch v := value.(type) {
+	case string:
+		// 单个字符串值
+		return mapEventType(v)
+	case []interface{}:
+		// 列表值（如 in 操作符），转换每个元素
+		result := make([]interface{}, len(v))
+		for i, item := range v {
+			if s, ok := item.(string); ok {
+				result[i] = mapEventType(s)
+			} else {
+				result[i] = item
+			}
+		}
+		return result
+	case map[string]interface{}:
+		// 复杂条件对象，如 {operator: "in", value: ["file_open", "file_delete"]}
+		// 需要转换 value 字段中的事件类型
+		if op, ok := v["operator"].(string); ok {
+			newV := make(map[string]interface{})
+			for key, val := range v {
+				if key == "value" {
+					// 转换 value 中的事件类型
+					switch val.(type) {
+					case string:
+						newV[key] = mapEventType(val.(string))
+					case []interface{}:
+						result := make([]interface{}, 0)
+						for _, item := range val.([]interface{}) {
+							if s, ok := item.(string); ok {
+								result = append(result, mapEventType(s))
+							} else {
+								result = append(result, item)
+							}
+						}
+						newV[key] = result
+					default:
+						newV[key] = val
+					}
+				} else {
+					newV[key] = val
+				}
+			}
+			// 添加 operator 字段（如果不存在）
+			if _, ok := newV["operator"]; !ok {
+				newV["operator"] = op
+			}
+			return newV
+		}
+		return value
+	default:
+		return value
+	}
+}
+
 // matchEventTypeString 事件类型别名匹配
 // 将配置中的事件类型别名映射到实际的事件类型名称
 func matchEventTypeString(eventType, expected string) bool {
@@ -783,32 +886,42 @@ func matchEventTypeString(eventType, expected string) bool {
 	}
 
 	// 事件类型别名映射表
+	// 键是规则配置中使用的逻辑名称（别名），值是实际的事件类型
 	aliasMappings := map[string][]string{
-		"file_open":      {"openat"},
-		"file_modify":    {"write", "chmod", "chown", "rename"},
-		"file_delete":    {"unlink"},
-		"file_access":    {"openat", "read", "write"},
-		"process_create": {"execve", "execveat", "fork", "clone"},
-		"process_exit":   {"exit"},
-		"network_connect": {"connect"},
-		"network_bind":   {"bind"},
-		"network_listen": {"listen"},
-		"network_accept": {"accept"},
-		"network_send":   {"sendto"},
-		"network_recv":   {"recvfrom"},
-		"network_socket": {"socket"},
-		"memory_mmap":    {"mmap"},
-		"memory_mprotect": {"mprotect"},
-		"memory_munmap":  {"munmap"},
+		"file_open":        {"openat"},
+		"file_modify":      {"write", "chmod", "chown", "rename"},
+		"file_delete":      {"unlink"},
+		"file_access":      {"openat", "read", "write"},
+		"process_create":   {"execve", "execveat", "fork", "clone"},
+		"process_exit":     {"exit"},
+		"network_connect":  {"connect"},
+		"network_bind":     {"bind"},
+		"network_listen":   {"listen"},
+		"network_accept":   {"accept"},
+		"network_send":     {"sendto"},
+		"network_recv":     {"recvfrom"},
+		"network_socket":   {"socket"},
+		"memory_mmap":      {"mmap"},
+		"memory_mprotect":  {"mprotect"},
+		"memory_munmap":    {"munmap"},
 		"privilege_setuid": {"setuid"},
 		"privilege_setgid": {"setgid"},
 		"privilege_ptrace": {"ptrace"},
-		"system_mount":   {"mount"},
-		"system_umount":  {"umount"},
-		"system_module":  {"init_module", "delete_module"},
+		"system_mount":     {"mount"},
+		"system_umount":    {"umount"},
+		"system_module":    {"init_module", "delete_module"},
 	}
 
-	// 检查 expected 是否是别名
+	// 建立反向映射：将实际事件类型名映射到别名
+	// 这样当 eventType 是实际名称（如 "openat"），expected 是别名（如 "file_open"）时也能正确匹配
+	reverseMappings := make(map[string][]string)
+	for alias, actualTypes := range aliasMappings {
+		for _, actualType := range actualTypes {
+			reverseMappings[actualType] = append(reverseMappings[actualType], alias)
+		}
+	}
+
+	// 检查 expected 是否是别名（正向映射）
 	if aliases, ok := aliasMappings[expectedLower]; ok {
 		for _, alias := range aliases {
 			if eventTypeLower == alias || eventType == alias {
@@ -817,10 +930,29 @@ func matchEventTypeString(eventType, expected string) bool {
 		}
 	}
 
-	// 检查 eventType 是否是别名，expected 是实际类型
+	// 检查 eventType 是否是别名（反向映射）
 	if aliases, ok := aliasMappings[eventTypeLower]; ok {
 		for _, alias := range aliases {
 			if expectedLower == alias || expected == alias {
+				return true
+			}
+		}
+	}
+
+	// 额外检查：如果 eventType 是实际类型名，检查 expected 是否是对应的别名
+	// 例如：eventType="openat", expected="file_open" 时应该匹配
+	if reverseAliases, ok := reverseMappings[eventTypeLower]; ok {
+		for _, alias := range reverseAliases {
+			if expectedLower == alias {
+				return true
+			}
+		}
+	}
+
+	// 如果 expected 是实际类型名，检查 eventType 是否是对应的别名
+	if reverseAliases, ok := reverseMappings[expectedLower]; ok {
+		for _, alias := range reverseAliases {
+			if eventTypeLower == alias {
 				return true
 			}
 		}

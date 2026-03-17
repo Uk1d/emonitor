@@ -375,16 +375,22 @@ func (m *UnifiedRuleManager) parseCondition(cond map[string]interface{}) engine.
 }
 
 func (m *UnifiedRuleManager) parseValueCondition(field, value string) *engine.ComparisonExpr {
-	if strings.HasPrefix(value, "regex:") {
+	// 对于 event_type 字段，将 Falco/Tracee 格式的事件类型别名转换为内部事件类型
+	processedValue := value
+	if field == "event_type" {
+		processedValue = engine.MapEventType(value)
+	}
+
+	if strings.HasPrefix(processedValue, "regex:") {
 		return &engine.ComparisonExpr{
 			Field:    field,
 			Operator: engine.OpRegex,
-			Value:    strings.TrimPrefix(value, "regex:"),
+			Value:    strings.TrimPrefix(processedValue, "regex:"),
 		}
 	}
 
-	if strings.Contains(value, "*") {
-		pattern := strings.ReplaceAll(strings.ReplaceAll(value, "*", ".*"), ".", "\\.")
+	if strings.Contains(processedValue, "*") {
+		pattern := strings.ReplaceAll(strings.ReplaceAll(processedValue, "*", ".*"), ".", "\\.")
 		return &engine.ComparisonExpr{
 			Field:    field,
 			Operator: engine.OpRegex,
@@ -392,15 +398,15 @@ func (m *UnifiedRuleManager) parseValueCondition(field, value string) *engine.Co
 		}
 	}
 
-	if strings.HasPrefix(value, ">=") || strings.HasPrefix(value, "<=") ||
-		strings.HasPrefix(value, ">") || strings.HasPrefix(value, "<") {
-		return m.parseNumericCondition(field, value)
+	if strings.HasPrefix(processedValue, ">=") || strings.HasPrefix(processedValue, "<=") ||
+		strings.HasPrefix(processedValue, ">") || strings.HasPrefix(processedValue, "<") {
+		return m.parseNumericCondition(field, processedValue)
 	}
 
 	return &engine.ComparisonExpr{
 		Field:    field,
 		Operator: engine.OpEquals,
-		Value:    value,
+		Value:    processedValue,
 	}
 }
 
@@ -445,39 +451,62 @@ func (m *UnifiedRuleManager) parseComplexCondition(field string, v map[string]in
 	op, _ := v["operator"].(string)
 	val := v["value"]
 
+	// 对于 event_type 字段，将 Falco/Tracee 格式的事件类型别名转换为内部事件类型
+	processedVal := val
+	if field == "event_type" {
+		switch v := val.(type) {
+		case string:
+			processedVal = engine.MapEventType(v)
+		case []interface{}:
+			// 对于列表（如 in 操作符），转换每个元素
+			newList := make([]interface{}, len(v))
+			for i, item := range v {
+				if s, ok := item.(string); ok {
+					newList[i] = engine.MapEventType(s)
+				} else {
+					newList[i] = item
+				}
+			}
+			processedVal = newList
+		}
+	}
+
 	switch strings.ToLower(op) {
 	case "contains":
-		return &engine.ComparisonExpr{Field: field, Operator: engine.OpContains, Value: val}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpContains, Value: processedVal}
 	case "not_contains":
-		return &engine.ComparisonExpr{Field: field, Operator: engine.OpNotContains, Value: val}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpNotContains, Value: processedVal}
 	case "regex":
-		pattern, _ := val.(string)
+		pattern, _ := processedVal.(string)
 		return &engine.ComparisonExpr{Field: field, Operator: engine.OpRegex, Value: pattern}
 	case "not_regex":
-		pattern, _ := val.(string)
+		pattern, _ := processedVal.(string)
 		return &engine.ComparisonExpr{Field: field, Operator: engine.OpNotRegex, Value: pattern}
 	case "in":
-		if list, ok := val.([]interface{}); ok {
+		if list, ok := processedVal.([]interface{}); ok {
 			return &engine.ComparisonExpr{Field: field, Operator: engine.OpIn, Value: list}
 		}
+		// 如果不是列表，也可能是单个值
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpIn, Value: []interface{}{processedVal}}
 	case "not_in":
-		if list, ok := val.([]interface{}); ok {
+		if list, ok := processedVal.([]interface{}); ok {
 			return &engine.ComparisonExpr{Field: field, Operator: engine.OpNotIn, Value: list}
 		}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpNotIn, Value: []interface{}{processedVal}}
 	case "exists":
 		return &engine.ComparisonExpr{Field: field, Operator: engine.OpExists}
 	case "not_exists":
 		return &engine.ComparisonExpr{Field: field, Operator: engine.OpNotExists}
 	case "gt", ">":
-		return &engine.ComparisonExpr{Field: field, Operator: engine.OpGT, Value: val}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpGT, Value: processedVal}
 	case "gte", ">=":
-		return &engine.ComparisonExpr{Field: field, Operator: engine.OpGTE, Value: val}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpGTE, Value: processedVal}
 	case "lt", "<":
-		return &engine.ComparisonExpr{Field: field, Operator: engine.OpLT, Value: val}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpLT, Value: processedVal}
 	case "lte", "<=":
-		return &engine.ComparisonExpr{Field: field, Operator: engine.OpLTE, Value: val}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpLTE, Value: processedVal}
 	default:
-		return &engine.ComparisonExpr{Field: field, Operator: engine.OpEquals, Value: val}
+		return &engine.ComparisonExpr{Field: field, Operator: engine.OpEquals, Value: processedVal}
 	}
 
 	return nil
