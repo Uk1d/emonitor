@@ -57,6 +57,42 @@ int trace_execve(struct trace_event_raw_sys_enter *ctx) {
         if (pathname) {
             bpf_probe_read_user_str(e->filename, sizeof(e->filename), pathname);
         }
+        
+        // 读取完整的命令行参数
+        const char *const *argv = (const char *const *)ctx->args[1];
+        if (argv) {
+            char *cmdline_ptr = e->cmdline;
+            int remaining = sizeof(e->cmdline) - 1;
+            
+            // 遍历argv数组，拼接所有参数
+            #pragma unroll
+            for (int i = 0; i < 20; i++) {
+                const char *arg = NULL;
+                bpf_probe_read_user(&arg, sizeof(arg), argv + i);
+                if (!arg) break;
+                
+                int arg_len = 0;
+                char tmp[256];
+                arg_len = bpf_probe_read_user_str(tmp, sizeof(tmp), arg);
+                if (arg_len <= 0) break;
+                
+                if (remaining <= arg_len) break;
+                
+                __builtin_memcpy(cmdline_ptr, tmp, arg_len);
+                cmdline_ptr += arg_len;
+                remaining -= arg_len;
+                
+                if (remaining <= 1) break;
+                
+                *cmdline_ptr = ' ';
+                cmdline_ptr++;
+                remaining--;
+            }
+            // 去除末尾可能的空格
+            if (cmdline_ptr > e->cmdline && cmdline_ptr[-1] == ' ') {
+                cmdline_ptr[-1] = '\0';
+            }
+        }
     });
 }
 
@@ -68,6 +104,40 @@ int trace_execveat(struct trace_event_raw_sys_enter *ctx) {
             bpf_probe_read_user_str(e->filename, sizeof(e->filename), pathname);
         }
         e->flags = (u32)ctx->args[4];
+        
+        // 读取完整的命令行参数 (args[2] 是 argv)
+        const char *const *argv = (const char *const *)ctx->args[2];
+        if (argv) {
+            char *cmdline_ptr = e->cmdline;
+            int remaining = sizeof(e->cmdline) - 1;
+            
+            #pragma unroll
+            for (int i = 0; i < 20; i++) {
+                const char *arg = NULL;
+                bpf_probe_read_user(&arg, sizeof(arg), argv + i);
+                if (!arg) break;
+                
+                int arg_len = 0;
+                char tmp[256];
+                arg_len = bpf_probe_read_user_str(tmp, sizeof(tmp), arg);
+                if (arg_len <= 0) break;
+                
+                if (remaining <= arg_len) break;
+                
+                __builtin_memcpy(cmdline_ptr, tmp, arg_len);
+                cmdline_ptr += arg_len;
+                remaining -= arg_len;
+                
+                if (remaining <= 1) break;
+                
+                *cmdline_ptr = ' ';
+                cmdline_ptr++;
+                remaining--;
+            }
+            if (cmdline_ptr > e->cmdline && cmdline_ptr[-1] == ' ') {
+                cmdline_ptr[-1] = '\0';
+            }
+        }
     });
 }
 

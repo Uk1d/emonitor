@@ -630,6 +630,126 @@ func (e *EnhancedRuleEngine) matchCompiledRule(event *EventJSON, rule *CompiledR
 // 匹配单个条件
 func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCondition) bool {
 	fieldValue := e.getFieldValue(event, cond.Field)
+
+	// 对于 event_type 字段，所有操作符都需要使用别名匹配
+	if cond.Field == "event_type" {
+		switch cond.Operator {
+		case OpEquals:
+			if len(cond.Values) == 0 {
+				return false
+			}
+			if eventType, ok := fieldValue.(string); ok {
+				return matchEventType(eventType, cond.Values[0])
+			}
+			return false
+
+		case OpNotEquals:
+			if len(cond.Values) == 0 {
+				return false
+			}
+			if eventType, ok := fieldValue.(string); ok {
+				return !matchEventType(eventType, cond.Values[0])
+			}
+			return false
+
+		case OpContains:
+			if len(cond.Values) == 0 {
+				return false
+			}
+			if str, ok := fieldValue.(string); ok {
+				if searchStr, ok := cond.Values[0].(string); ok {
+					return strings.Contains(str, searchStr)
+				}
+			}
+			return false
+
+		case OpNotContains:
+			if len(cond.Values) == 0 {
+				return true
+			}
+			if str, ok := fieldValue.(string); ok {
+				if searchStr, ok := cond.Values[0].(string); ok {
+					return !strings.Contains(str, searchStr)
+				}
+			}
+			return true
+
+		case OpRegexMatch:
+			if str, ok := fieldValue.(string); ok && cond.CompiledRegex != nil {
+				return cond.CompiledRegex.MatchString(str)
+			}
+			return false
+
+		case OpNotRegex:
+			if str, ok := fieldValue.(string); ok && cond.CompiledRegex != nil {
+				return !cond.CompiledRegex.MatchString(str)
+			}
+			return true
+
+		case OpGreaterThan, OpLessThan, OpGreaterEqual, OpLessEqual:
+			if cond.IsNumeric {
+				if num := e.toNumeric(fieldValue); num != nil {
+					switch cond.Operator {
+					case OpGreaterThan:
+						return *num > cond.NumericValue
+					case OpLessThan:
+						return *num < cond.NumericValue
+					case OpGreaterEqual:
+						return *num >= cond.NumericValue
+					case OpLessEqual:
+						return *num <= cond.NumericValue
+					}
+				}
+			}
+			return false
+
+		case OpIn:
+			for _, val := range cond.Values {
+				if eventType, ok := fieldValue.(string); ok {
+					if matchEventType(eventType, val) {
+						return true
+					}
+					continue
+				}
+				if e.compareValues(fieldValue, val, OpEquals) {
+					return true
+				}
+			}
+			return false
+
+		case OpNotIn:
+			for _, val := range cond.Values {
+				if eventType, ok := fieldValue.(string); ok {
+					if matchEventType(eventType, val) {
+						return false
+					}
+					continue
+				}
+				if e.compareValues(fieldValue, val, OpEquals) {
+					return false
+				}
+			}
+			return true
+
+		case OpExists:
+			switch v := fieldValue.(type) {
+			case string:
+				return strings.TrimSpace(v) != ""
+			default:
+				return true
+			}
+		case OpNotExists:
+			switch v := fieldValue.(type) {
+			case string:
+				return strings.TrimSpace(v) == ""
+			default:
+				return fieldValue == nil
+			}
+		}
+		return false
+	}
+
+	// 非 event_type 字段，使用原有逻辑
 	if fieldValue == nil {
 		return false
 	}
@@ -639,22 +759,11 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 		if len(cond.Values) == 0 {
 			return false
 		}
-		if cond.Field == "event_type" {
-			if eventType, ok := fieldValue.(string); ok {
-				return matchEventType(eventType, cond.Values[0])
-			}
-		}
 		return e.compareValues(fieldValue, cond.Values[0], OpEquals)
 
 	case OpNotEquals:
 		if len(cond.Values) == 0 {
 			return false
-		}
-		// 对于 event_type 字段，使用别名匹配
-		if cond.Field == "event_type" {
-			if eventType, ok := fieldValue.(string); ok {
-				return !matchEventType(eventType, cond.Values[0])
-			}
 		}
 		return !e.compareValues(fieldValue, cond.Values[0], OpEquals)
 
@@ -671,7 +780,7 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 
 	case OpNotContains:
 		if len(cond.Values) == 0 {
-			return true // 如果没有值要检查，则认为不包含任何内容
+			return true
 		}
 		if str, ok := fieldValue.(string); ok {
 			if searchStr, ok := cond.Values[0].(string); ok {
@@ -685,6 +794,7 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 			return cond.CompiledRegex.MatchString(str)
 		}
 		return false
+
 	case OpNotRegex:
 		if str, ok := fieldValue.(string); ok && cond.CompiledRegex != nil {
 			return !cond.CompiledRegex.MatchString(str)
@@ -710,14 +820,6 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 
 	case OpIn:
 		for _, val := range cond.Values {
-			if cond.Field == "event_type" {
-				if eventType, ok := fieldValue.(string); ok {
-					if matchEventType(eventType, val) {
-						return true
-					}
-					continue
-				}
-			}
 			if e.compareValues(fieldValue, val, OpEquals) {
 				return true
 			}
@@ -726,19 +828,12 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 
 	case OpNotIn:
 		for _, val := range cond.Values {
-			if cond.Field == "event_type" {
-				if eventType, ok := fieldValue.(string); ok {
-					if matchEventType(eventType, val) {
-						return false
-					}
-					continue
-				}
-			}
 			if e.compareValues(fieldValue, val, OpEquals) {
 				return false
 			}
 		}
 		return true
+
 	case OpExists:
 		switch v := fieldValue.(type) {
 		case string:
@@ -746,6 +841,7 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 		default:
 			return true
 		}
+
 	case OpNotExists:
 		switch v := fieldValue.(type) {
 		case string:

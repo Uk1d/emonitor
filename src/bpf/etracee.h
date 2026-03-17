@@ -89,6 +89,7 @@ struct event {
     
     char comm[16];              // 进程名
     char filename[256];         // 文件名/路径
+    char cmdline[1024];         // 命令行参数（完整）
     
     // 扩展字段
     __u32 mode;                 // 文件权限/模式

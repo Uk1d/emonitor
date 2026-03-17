@@ -51,6 +51,7 @@ type RawEvent struct {
 	RetCode    int32       `json:"ret_code"`
 	Comm       [16]byte    `json:"-"`
 	Filename   [256]byte   `json:"-"`
+	Cmdline    [1024]byte  `json:"-"`
 	Mode       uint32      `json:"mode"`
 	Size       uint64      `json:"size"`
 	Flags      uint32      `json:"flags"`
@@ -338,6 +339,11 @@ func convertToJSON(raw *RawEvent) *EventJSON {
 		event.Filename = filename
 	}
 
+	// 命令行参数（从BPF直接捕获）
+	if cmdline := bytesToString(raw.Cmdline[:]); cmdline != "" {
+		event.Cmdline = cmdline
+	}
+
 	// 模式和标志
 	if raw.Mode != 0 {
 		event.Mode = raw.Mode
@@ -400,12 +406,30 @@ func convertToJSON(raw *RawEvent) *EventJSON {
 }
 
 // 补充事件的命令行：仅在Linux可用，读取 /proc/<pid>/cmdline
+// 优先使用BPF已捕获的cmdline，如果为空则尝试从proc读取
 func enrichEventCmdline(event *EventJSON) {
 	if runtime.GOOS != "linux" {
 		return
 	}
+	// 优先使用BPF已捕获的cmdline
+	if event.Cmdline != "" {
+		// 对于 execve/execveat 事件，如果 filename 是相对路径，尝试从 cmdline 中查找实际路径
+		if event.EventType == "execve" || event.EventType == "execveat" {
+			if len(event.Filename) > 0 && event.Filename[0] != '/' {
+				parts := strings.Fields(event.Cmdline)
+				for i := 1; i < len(parts); i++ {
+					if strings.HasPrefix(parts[i], "/") {
+						event.Filename = parts[i]
+						break
+					}
+				}
+			}
+		}
+		return
+	}
+
+	// BPF未捕获cmdline时，从/proc/<pid>/cmdline读取（作为后备方案）
 	// 为所有进程相关事件尝试填充命令行参数
-	// 这些事件都可能包含重要的命令行信息，用于规则匹配
 	switch event.EventType {
 	case "execve", "execveat", "fork", "clone", "exit",
 		"setuid", "setgid", "setreuid", "setregid", "setresuid", "setresgid",
