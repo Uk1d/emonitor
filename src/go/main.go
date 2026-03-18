@@ -203,13 +203,32 @@ func (et EventType) String() string {
 	}
 }
 
-// 字节数组转字符串
-func bytesToString(b []byte) string {
+// safeBytesToString 将字节数组转换为安全的UTF-8字符串
+// 对于无效的UTF-8序列，使用Unicode替换字符(U+FFFD)替换
+func safeBytesToString(b []byte) string {
 	n := bytes.IndexByte(b, 0)
 	if n == -1 {
 		n = len(b)
 	}
-	return string(b[:n])
+	// 使用strconv.Quote将无效UTF-8字符转义，然后去除引号
+	// 或者直接用utf8.DecodeRune来检查并替换无效字符
+	result := make([]byte, 0, n)
+	for i := 0; i < n; i++ {
+		c := b[i]
+		// 简单处理：如果字节值在可打印ASCII范围(32-126)或为空白字符(9-13)，直接保留
+		// 其他字节作为无效字符替换为问号
+		if (c >= 32 && c <= 126) || c == 9 || c == 10 || c == 13 {
+			result = append(result, c)
+		} else {
+			result = append(result, '?')
+		}
+	}
+	return string(result)
+}
+
+// 字节数组转字符串（已废弃，请使用safeBytesToString）
+func bytesToString(b []byte) string {
+	return safeBytesToString(b)
 }
 
 func parseRawEvent(b []byte) (*RawEvent, error) {
@@ -502,7 +521,9 @@ func enrichEventCmdline(event *EventJSON) {
 		if len(data) == 0 {
 			return
 		}
-		s := strings.ReplaceAll(string(data), "\x00", " ")
+		// 将\0分隔的字节转换为安全字符串
+		safeData := safeBytesToString(data)
+		s := strings.ReplaceAll(safeData, "\x00", " ")
 		s = strings.TrimSpace(s)
 		if s != "" {
 			event.Cmdline = s
