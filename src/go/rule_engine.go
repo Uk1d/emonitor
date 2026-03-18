@@ -388,6 +388,27 @@ func (e *EnhancedRuleEngine) compileCondition(condition map[string]interface{}) 
 			cond.Operator = OpIn
 			cond.Values = v
 
+		case int:
+			cond.Operator = OpEquals
+			cond.NumericValue = float64(v)
+			cond.IsNumeric = true
+			cond.Values = []interface{}{float64(v)}
+		case int64:
+			cond.Operator = OpEquals
+			cond.NumericValue = float64(v)
+			cond.IsNumeric = true
+			cond.Values = []interface{}{float64(v)}
+		case uint32:
+			cond.Operator = OpEquals
+			cond.NumericValue = float64(v)
+			cond.IsNumeric = true
+			cond.Values = []interface{}{float64(v)}
+		case float64:
+			cond.Operator = OpEquals
+			cond.NumericValue = v
+			cond.IsNumeric = true
+			cond.Values = []interface{}{v}
+
 		case map[string]interface{}:
 			// 处理复杂条件对象
 			if op, exists := v["operator"]; exists {
@@ -1249,6 +1270,16 @@ func (e *EnhancedRuleEngine) compareValues(a, b interface{}, op ComparisonOp) bo
 		}
 		if vb, ok := b.(float64); ok {
 			return float64(va) == vb
+		}
+	case float64:
+		if vb, ok := b.(float64); ok {
+			return va == vb
+		}
+		if vb, ok := b.(int); ok {
+			return va == float64(vb)
+		}
+		if vb, ok := b.(uint32); ok {
+			return va == float64(vb)
 		}
 	}
 	return false

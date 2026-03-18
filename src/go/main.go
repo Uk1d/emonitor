@@ -213,7 +213,7 @@ func bytesToString(b []byte) string {
 }
 
 func parseRawEvent(b []byte) (*RawEvent, error) {
-	if len(b) < 428 {
+	if len(b) < 52 {
 		return nil, fmt.Errorf("invalid event size: %d", len(b))
 	}
 	e := &RawEvent{}
@@ -226,26 +226,83 @@ func parseRawEvent(b []byte) (*RawEvent, error) {
 	e.EventType = binary.LittleEndian.Uint32(b[28:32])
 	e.RetCode = int32(binary.LittleEndian.Uint32(b[32:36]))
 	copy(e.Comm[:], b[36:52])
-	copy(e.Filename[:], b[52:308])
-	e.Mode = binary.LittleEndian.Uint32(b[308:312])
-	e.Size = binary.LittleEndian.Uint64(b[312:320])
-	e.Flags = binary.LittleEndian.Uint32(b[320:324])
-	e.SrcAddr.Family = binary.LittleEndian.Uint16(b[324:326])
-	e.SrcAddr.Port = binary.LittleEndian.Uint16(b[326:328])
-	copy(e.SrcAddr.Addr[:], b[328:344])
-	e.DstAddr.Family = binary.LittleEndian.Uint16(b[344:346])
-	e.DstAddr.Port = binary.LittleEndian.Uint16(b[346:348])
-	copy(e.DstAddr.Addr[:], b[348:364])
-	e.OldUID = binary.LittleEndian.Uint32(b[364:368])
-	e.OldGID = binary.LittleEndian.Uint32(b[368:372])
-	e.NewUID = binary.LittleEndian.Uint32(b[372:376])
-	e.NewGID = binary.LittleEndian.Uint32(b[376:380])
-	e.Addr = binary.LittleEndian.Uint64(b[384:392])
-	e.Len = binary.LittleEndian.Uint64(b[392:400])
-	e.Prot = binary.LittleEndian.Uint32(b[400:404])
-	copy(e.TargetComm[:], b[404:420])
-	e.TargetPID = binary.LittleEndian.Uint32(b[420:424])
-	e.Signal = binary.LittleEndian.Uint32(b[424:428])
+
+	// filename: offset 52, size 256
+	if len(b) > 308 {
+		copy(e.Filename[:], b[52:min(308, len(b))])
+	}
+
+	// cmdline: offset 308, size 1024 - 未使用，跳过
+
+	// mode: offset 1332
+	if len(b) > 1336 {
+		e.Mode = binary.LittleEndian.Uint32(b[1332:1336])
+	}
+	// size: offset 1336
+	if len(b) > 1344 {
+		e.Size = binary.LittleEndian.Uint64(b[1336:1344])
+	}
+	// flags: offset 1344
+	if len(b) > 1348 {
+		e.Flags = binary.LittleEndian.Uint32(b[1344:1348])
+	}
+	// src_addr: offset 1348
+	if len(b) > 1350 {
+		e.SrcAddr.Family = binary.LittleEndian.Uint16(b[1348:1350])
+	}
+	if len(b) > 1352 {
+		e.SrcAddr.Port = binary.LittleEndian.Uint16(b[1350:1352])
+	}
+	if len(b) > 1368 {
+		copy(e.SrcAddr.Addr[:], b[1352:min(1368, len(b))])
+	}
+	// dst_addr: offset 1368
+	if len(b) > 1370 {
+		e.DstAddr.Family = binary.LittleEndian.Uint16(b[1368:1370])
+	}
+	if len(b) > 1372 {
+		e.DstAddr.Port = binary.LittleEndian.Uint16(b[1370:1372])
+	}
+	if len(b) > 1388 {
+		copy(e.DstAddr.Addr[:], b[1372:min(1388, len(b))])
+	}
+	// old_uid: offset 1388
+	if len(b) > 1392 {
+		e.OldUID = binary.LittleEndian.Uint32(b[1388:1392])
+	}
+	if len(b) > 1396 {
+		e.OldGID = binary.LittleEndian.Uint32(b[1392:1396])
+	}
+	if len(b) > 1400 {
+		e.NewUID = binary.LittleEndian.Uint32(b[1396:1400])
+	}
+	if len(b) > 1404 {
+		e.NewGID = binary.LittleEndian.Uint32(b[1400:1404])
+	}
+	// addr: offset 1408
+	if len(b) > 1416 {
+		e.Addr = binary.LittleEndian.Uint64(b[1408:1416])
+	}
+	// len: offset 1416
+	if len(b) > 1424 {
+		e.Len = binary.LittleEndian.Uint64(b[1416:1424])
+	}
+	// prot: offset 1424
+	if len(b) > 1428 {
+		e.Prot = binary.LittleEndian.Uint32(b[1424:1428])
+	}
+	// target_comm: offset 1428
+	if len(b) > 1444 {
+		copy(e.TargetComm[:], b[1428:min(1444, len(b))])
+	}
+	// target_pid: offset 1444
+	if len(b) > 1448 {
+		e.TargetPID = binary.LittleEndian.Uint32(b[1444:1448])
+	}
+	// signal: offset 1448
+	if len(b) > 1452 {
+		e.Signal = binary.LittleEndian.Uint32(b[1448:1452])
+	}
 	return e, nil
 }
 
@@ -303,9 +360,8 @@ func addrToString(addr NetworkAddr) *AddrJSON {
 		result.Port = ntohs(addr.Port)
 		result.IP = net.IP(addr.Addr[:]).String()
 	default:
-		// 非IP地址族（如AF_UNIX/NETLINK/PACKET）不设置IP与端口
-		result.Port = 0
-		result.IP = result.Family
+		// 非IP地址族，不设置IP与端口
+		return nil
 	}
 
 	return result
@@ -435,7 +491,7 @@ func enrichEventCmdline(event *EventJSON) {
 		"setuid", "setgid", "setreuid", "setregid", "setresuid", "setresgid",
 		"prctl", "ptrace", "kill", "mmap", "mprotect", "munmap", "mremap",
 		"mount", "umount", "init_module", "delete_module", "setns", "unshare",
-		"chmod", "chown", "unlink", "rename", "openat", "close", "read", "write",
+		"chmod", "chown", "unlink", "rename", "openat", "open", "openat2", "close", "read", "write",
 		"connect", "bind", "listen", "accept", "sendto", "recvfrom", "socket", "shutdown":
 		// 读取cmdline（以\0分隔），转换为空格分隔的字符串
 		path := fmt.Sprintf("/proc/%d/cmdline", event.PID)

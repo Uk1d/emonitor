@@ -21,8 +21,23 @@ type TestRunner struct {
 
 // NewTestRunner 创建新的测试运行器
 func NewTestRunner() *TestRunner {
+	// 尝试多个可能的配置路径
+	configPaths := []string{
+		"../config/enhanced_security_config.yaml",
+		"../../config/enhanced_security_config.yaml",
+		"./config/enhanced_security_config.yaml",
+	}
+
+	defaultConfigPath := ""
+	for _, p := range configPaths {
+		if _, err := os.Stat(p); err == nil {
+			defaultConfigPath = p
+			break
+		}
+	}
+
 	return &TestRunner{
-		configPath:   "./config/enhanced_security_config.yaml",
+		configPath:   defaultConfigPath,
 		testDataPath: "./test_data",
 		reportPath:   "./test_reports",
 		verbose:      false,
@@ -219,7 +234,7 @@ func (tr *TestRunner) printDetailedResults(report *TestReport) {
 	fmt.Println(strings.Repeat("-", 80))
 
 	for _, result := range tr.framework.results {
-    status := "[+] PASS"
+		status := "[+] PASS"
 		if !result.Passed {
 			status = "✗ FAIL"
 		}

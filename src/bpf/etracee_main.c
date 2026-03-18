@@ -244,9 +244,6 @@ static inline void init_event_base(struct event *e, u32 event_type) {
         struct event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0); \
         if (!e) return 0; \
         \
-        /* 清零事件结构，避免未设置字段残留随机值 */ \
-        __builtin_memset(e, 0, sizeof(*e)); \
-        \
         /* 初始化事件基础信息 */ \
         init_event_base(e, event_type); \
         e->syscall_id = ctx->id; \

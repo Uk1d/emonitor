@@ -353,6 +353,9 @@ func (s *MySQLStorage) SaveEvent(event *EventJSON) error {
 		timestamp = time.Now()
 	}
 
+	// 清理filename中的非UTF-8字符
+	filename := cleanUTF8(event.Filename)
+
 	query := `INSERT INTO events (timestamp, pid, uid, comm, event_type, filename, severity, rule_matched, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err = s.DB.Exec(query,
 		timestamp,
@@ -360,12 +363,26 @@ func (s *MySQLStorage) SaveEvent(event *EventJSON) error {
 		event.UID,
 		event.Comm,
 		event.EventType,
-		event.Filename,
+		filename,
 		event.Severity,
 		event.RuleMatched,
 		string(raw),
 	)
 	return err
+}
+
+// cleanUTF8 清理字符串中的非UTF-8字符
+func cleanUTF8(s string) string {
+	result := make([]rune, 0, len(s))
+	for _, r := range s {
+		if r == 0 || (r < 32 && r != 9 && r != 10 && r != 13) {
+			continue
+		}
+		if r < 0x110000 {
+			result = append(result, r)
+		}
+	}
+	return string(result)
 }
 
 // QueryEvents 查询事件
