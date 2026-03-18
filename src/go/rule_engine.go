@@ -312,8 +312,8 @@ func (e *EnhancedRuleEngine) compileCondition(condition map[string]interface{}) 
 					return nil, fmt.Errorf("无效的正则表达式: %s", regexPattern)
 				}
 				cond.CompiledRegex = regex
-				// 为正则匹配也保存原始值，以便调试
-				cond.Values = []interface{}{regexPattern}
+				// 保存原始值（包括 regex: 前缀），供 matchEventTypeWithRegex 检测
+				cond.Values = []interface{}{v}
 			} else if strings.HasPrefix(v, "notregex:") || strings.HasPrefix(v, "not_regex:") {
 				cond.Operator = OpNotRegex
 				listStr := strings.TrimPrefix(v, "notregex:")
@@ -323,7 +323,8 @@ func (e *EnhancedRuleEngine) compileCondition(condition map[string]interface{}) 
 					return nil, fmt.Errorf("无效的正则表达式: %s", listStr)
 				}
 				cond.CompiledRegex = regex
-				cond.Values = []interface{}{listStr}
+				// 保存原始值（包括 notregex: 前缀），供 matchEventTypeWithRegex 检测
+				cond.Values = []interface{}{v}
 			} else if strings.HasPrefix(v, "notin:") || strings.HasPrefix(v, "not_in:") {
 				cond.Operator = OpNotIn
 				listStr := strings.TrimPrefix(v, "notin:")
@@ -660,7 +661,7 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 				return false
 			}
 			if eventType, ok := fieldValue.(string); ok {
-				return matchEventType(eventType, cond.Values[0])
+				return matchEventTypeWithRegex(eventType, cond.Values[0], cond.CompiledRegex)
 			}
 			return false
 
@@ -669,7 +670,7 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 				return false
 			}
 			if eventType, ok := fieldValue.(string); ok {
-				return !matchEventType(eventType, cond.Values[0])
+				return !matchEventTypeWithRegex(eventType, cond.Values[0], cond.CompiledRegex)
 			}
 			return false
 
@@ -873,6 +874,21 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 	}
 
 	return false
+}
+
+// matchEventTypeWithRegex 处理 event_type 字段的匹配
+// 如果 expected 是正则表达式字符串(以 regex: 开头)，则使用 CompiledRegex 进行匹配
+// 否则调用 matchEventType 进行普通匹配
+func matchEventTypeWithRegex(eventType string, expected interface{}, compiledRegex *regexp.Regexp) bool {
+	if str, ok := expected.(string); ok {
+		if len(str) > 6 && str[:6] == "regex:" {
+			if compiledRegex != nil {
+				return compiledRegex.MatchString(eventType)
+			}
+			return false
+		}
+	}
+	return matchEventType(eventType, expected)
 }
 
 func matchEventType(eventType string, expected interface{}) bool {
