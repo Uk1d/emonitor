@@ -1037,6 +1037,11 @@ func (ec *EventContext) GetFileContextCount() int {
 
 // 辅助方法
 func (ec *EventContext) isEventRelatedToChain(event *EventJSON, chain *AttackChain) bool {
+	// 先检查时间窗口，超时的攻击链不再关联新事件
+	if time.Since(chain.LastUpdate) > ec.config.AttackChainTimeout {
+		return false
+	}
+
 	// 检查进程关联
 	for _, pid := range chain.InvolvedProcesses {
 		if pid == event.PID || pid == event.PPID {
@@ -1069,11 +1074,6 @@ func (ec *EventContext) isEventRelatedToChain(event *EventJSON, chain *AttackCha
 				return true
 			}
 		}
-	}
-
-	// 检查时间窗口
-	if time.Since(chain.LastUpdate) > ec.config.AttackChainTimeout {
-		return false
 	}
 
 	return false
@@ -1404,10 +1404,7 @@ func (ec *EventContext) startBackgroundTasks() {
 		select {
 		case <-cleanupTicker.C:
 			ec.cleanupExpiredContexts()
-		case _, ok := <-persistTicker.C:
-			if !ok {
-				continue
-			}
+		case <-persistTicker.C:
 			if ec.config.EnablePersistence {
 				ec.persistContexts()
 			}

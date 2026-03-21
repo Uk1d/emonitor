@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -295,13 +296,7 @@ func (e *EnhancedRuleEngine) compileCondition(condition map[string]interface{}) 
 	for field, value := range condition {
 		cond.Field = field
 
-		// 对于 event_type 字段，将 Falco/Tracee 格式的事件类型别名转换为内部事件类型
-		processedValue := value
-		if field == "event_type" {
-			processedValue = convertEventTypeValue(value)
-		}
-
-		switch v := processedValue.(type) {
+		switch v := value.(type) {
 		case string:
 			// 解析操作符和值
 			if strings.HasPrefix(v, "regex:") {
@@ -312,8 +307,8 @@ func (e *EnhancedRuleEngine) compileCondition(condition map[string]interface{}) 
 					return nil, fmt.Errorf("无效的正则表达式: %s", regexPattern)
 				}
 				cond.CompiledRegex = regex
-				// 保存原始值（包括 regex: 前缀），供 matchEventTypeWithRegex 检测
-				cond.Values = []interface{}{v}
+				// 为正则匹配也保存原始值，以便调试
+				cond.Values = []interface{}{regexPattern}
 			} else if strings.HasPrefix(v, "notregex:") || strings.HasPrefix(v, "not_regex:") {
 				cond.Operator = OpNotRegex
 				listStr := strings.TrimPrefix(v, "notregex:")
@@ -323,8 +318,7 @@ func (e *EnhancedRuleEngine) compileCondition(condition map[string]interface{}) 
 					return nil, fmt.Errorf("无效的正则表达式: %s", listStr)
 				}
 				cond.CompiledRegex = regex
-				// 保存原始值（包括 notregex: 前缀），供 matchEventTypeWithRegex 检测
-				cond.Values = []interface{}{v}
+				cond.Values = []interface{}{listStr}
 			} else if strings.HasPrefix(v, "notin:") || strings.HasPrefix(v, "not_in:") {
 				cond.Operator = OpNotIn
 				listStr := strings.TrimPrefix(v, "notin:")
@@ -388,27 +382,6 @@ func (e *EnhancedRuleEngine) compileCondition(condition map[string]interface{}) 
 		case []interface{}:
 			cond.Operator = OpIn
 			cond.Values = v
-
-		case int:
-			cond.Operator = OpEquals
-			cond.NumericValue = float64(v)
-			cond.IsNumeric = true
-			cond.Values = []interface{}{float64(v)}
-		case int64:
-			cond.Operator = OpEquals
-			cond.NumericValue = float64(v)
-			cond.IsNumeric = true
-			cond.Values = []interface{}{float64(v)}
-		case uint32:
-			cond.Operator = OpEquals
-			cond.NumericValue = float64(v)
-			cond.IsNumeric = true
-			cond.Values = []interface{}{float64(v)}
-		case float64:
-			cond.Operator = OpEquals
-			cond.NumericValue = v
-			cond.IsNumeric = true
-			cond.Values = []interface{}{v}
 
 		case map[string]interface{}:
 			// 处理复杂条件对象
@@ -652,126 +625,6 @@ func (e *EnhancedRuleEngine) matchCompiledRule(event *EventJSON, rule *CompiledR
 // 匹配单个条件
 func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCondition) bool {
 	fieldValue := e.getFieldValue(event, cond.Field)
-
-	// 对于 event_type 字段，所有操作符都需要使用别名匹配
-	if cond.Field == "event_type" {
-		switch cond.Operator {
-		case OpEquals:
-			if len(cond.Values) == 0 {
-				return false
-			}
-			if eventType, ok := fieldValue.(string); ok {
-				return matchEventTypeWithRegex(eventType, cond.Values[0], cond.CompiledRegex)
-			}
-			return false
-
-		case OpNotEquals:
-			if len(cond.Values) == 0 {
-				return false
-			}
-			if eventType, ok := fieldValue.(string); ok {
-				return !matchEventTypeWithRegex(eventType, cond.Values[0], cond.CompiledRegex)
-			}
-			return false
-
-		case OpContains:
-			if len(cond.Values) == 0 {
-				return false
-			}
-			if str, ok := fieldValue.(string); ok {
-				if searchStr, ok := cond.Values[0].(string); ok {
-					return strings.Contains(str, searchStr)
-				}
-			}
-			return false
-
-		case OpNotContains:
-			if len(cond.Values) == 0 {
-				return true
-			}
-			if str, ok := fieldValue.(string); ok {
-				if searchStr, ok := cond.Values[0].(string); ok {
-					return !strings.Contains(str, searchStr)
-				}
-			}
-			return true
-
-		case OpRegexMatch:
-			if str, ok := fieldValue.(string); ok && cond.CompiledRegex != nil {
-				return cond.CompiledRegex.MatchString(str)
-			}
-			return false
-
-		case OpNotRegex:
-			if str, ok := fieldValue.(string); ok && cond.CompiledRegex != nil {
-				return !cond.CompiledRegex.MatchString(str)
-			}
-			return true
-
-		case OpGreaterThan, OpLessThan, OpGreaterEqual, OpLessEqual:
-			if cond.IsNumeric {
-				if num := e.toNumeric(fieldValue); num != nil {
-					switch cond.Operator {
-					case OpGreaterThan:
-						return *num > cond.NumericValue
-					case OpLessThan:
-						return *num < cond.NumericValue
-					case OpGreaterEqual:
-						return *num >= cond.NumericValue
-					case OpLessEqual:
-						return *num <= cond.NumericValue
-					}
-				}
-			}
-			return false
-
-		case OpIn:
-			for _, val := range cond.Values {
-				if eventType, ok := fieldValue.(string); ok {
-					if matchEventType(eventType, val) {
-						return true
-					}
-					continue
-				}
-				if e.compareValues(fieldValue, val, OpEquals) {
-					return true
-				}
-			}
-			return false
-
-		case OpNotIn:
-			for _, val := range cond.Values {
-				if eventType, ok := fieldValue.(string); ok {
-					if matchEventType(eventType, val) {
-						return false
-					}
-					continue
-				}
-				if e.compareValues(fieldValue, val, OpEquals) {
-					return false
-				}
-			}
-			return true
-
-		case OpExists:
-			switch v := fieldValue.(type) {
-			case string:
-				return strings.TrimSpace(v) != ""
-			default:
-				return true
-			}
-		case OpNotExists:
-			switch v := fieldValue.(type) {
-			case string:
-				return strings.TrimSpace(v) == ""
-			default:
-				return fieldValue == nil
-			}
-		}
-		return false
-	}
-
-	// 非 event_type 字段，使用原有逻辑
 	if fieldValue == nil {
 		return false
 	}
@@ -781,11 +634,22 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 		if len(cond.Values) == 0 {
 			return false
 		}
+		if cond.Field == "event_type" {
+			if eventType, ok := fieldValue.(string); ok {
+				return matchEventType(eventType, cond.Values[0])
+			}
+		}
 		return e.compareValues(fieldValue, cond.Values[0], OpEquals)
 
 	case OpNotEquals:
 		if len(cond.Values) == 0 {
 			return false
+		}
+		// 对于 event_type 字段，使用别名匹配
+		if cond.Field == "event_type" {
+			if eventType, ok := fieldValue.(string); ok {
+				return !matchEventType(eventType, cond.Values[0])
+			}
 		}
 		return !e.compareValues(fieldValue, cond.Values[0], OpEquals)
 
@@ -802,7 +666,7 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 
 	case OpNotContains:
 		if len(cond.Values) == 0 {
-			return true
+			return true // 如果没有值要检查，则认为不包含任何内容
 		}
 		if str, ok := fieldValue.(string); ok {
 			if searchStr, ok := cond.Values[0].(string); ok {
@@ -816,7 +680,6 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 			return cond.CompiledRegex.MatchString(str)
 		}
 		return false
-
 	case OpNotRegex:
 		if str, ok := fieldValue.(string); ok && cond.CompiledRegex != nil {
 			return !cond.CompiledRegex.MatchString(str)
@@ -842,6 +705,14 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 
 	case OpIn:
 		for _, val := range cond.Values {
+			if cond.Field == "event_type" {
+				if eventType, ok := fieldValue.(string); ok {
+					if matchEventType(eventType, val) {
+						return true
+					}
+					continue
+				}
+			}
 			if e.compareValues(fieldValue, val, OpEquals) {
 				return true
 			}
@@ -850,12 +721,19 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 
 	case OpNotIn:
 		for _, val := range cond.Values {
+			if cond.Field == "event_type" {
+				if eventType, ok := fieldValue.(string); ok {
+					if matchEventType(eventType, val) {
+						return false
+					}
+					continue
+				}
+			}
 			if e.compareValues(fieldValue, val, OpEquals) {
 				return false
 			}
 		}
 		return true
-
 	case OpExists:
 		switch v := fieldValue.(type) {
 		case string:
@@ -863,7 +741,6 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 		default:
 			return true
 		}
-
 	case OpNotExists:
 		switch v := fieldValue.(type) {
 		case string:
@@ -874,21 +751,6 @@ func (e *EnhancedRuleEngine) matchCondition(event *EventJSON, cond *CompiledCond
 	}
 
 	return false
-}
-
-// matchEventTypeWithRegex 处理 event_type 字段的匹配
-// 如果 expected 是正则表达式字符串(以 regex: 开头)，则使用 CompiledRegex 进行匹配
-// 否则调用 matchEventType 进行普通匹配
-func matchEventTypeWithRegex(eventType string, expected interface{}, compiledRegex *regexp.Regexp) bool {
-	if str, ok := expected.(string); ok {
-		if len(str) > 6 && str[:6] == "regex:" {
-			if compiledRegex != nil {
-				return compiledRegex.MatchString(eventType)
-			}
-			return false
-		}
-	}
-	return matchEventType(eventType, expected)
 }
 
 func matchEventType(eventType string, expected interface{}) bool {
@@ -903,103 +765,6 @@ func matchEventType(eventType string, expected interface{}) bool {
 		}
 	}
 	return false
-}
-
-// convertEventTypeValue 将事件类型别名转换为内部事件类型
-// 用于在规则编译时预处理条件值
-func convertEventTypeValue(value interface{}) interface{} {
-	// 事件类型别名映射表
-	aliases := map[string]string{
-		"open":            "openat",
-		"openat2":         "openat",
-		"execveat":        "execve",
-		"vfork":           "fork",
-		"clone3":          "clone",
-		"accept4":         "accept",
-		"accept_conn":     "accept",
-		"connect_unix":    "connect",
-		"connect_tcp":     "connect",
-		"sendmsg":         "sendto",
-		"recvmsg":         "recvfrom",
-		"fstat":           "stat",
-		"lstat":           "stat",
-		"newfstatat":      "stat",
-		"statx":           "stat",
-		"fchown":          "chown",
-		"lchown":          "chown",
-		"fchmod":          "chmod",
-		"unlinkat":        "unlink",
-		"renameat":        "rename",
-		"renameat2":       "rename",
-		"umount":          "umount2",
-		"finit_module":    "init_module",
-		"process_create":  "execve",
-		"file_open":       "openat",
-		"file_delete":     "unlink",
-		"file_modify":     "write",
-		"network_connect": "connect",
-	}
-
-	mapEventType := func(eventType string) string {
-		if mapped, ok := aliases[eventType]; ok {
-			return mapped
-		}
-		return eventType
-	}
-
-	switch v := value.(type) {
-	case string:
-		// 单个字符串值
-		return mapEventType(v)
-	case []interface{}:
-		// 列表值（如 in 操作符），转换每个元素
-		result := make([]interface{}, len(v))
-		for i, item := range v {
-			if s, ok := item.(string); ok {
-				result[i] = mapEventType(s)
-			} else {
-				result[i] = item
-			}
-		}
-		return result
-	case map[string]interface{}:
-		// 复杂条件对象，如 {operator: "in", value: ["file_open", "file_delete"]}
-		// 需要转换 value 字段中的事件类型
-		if op, ok := v["operator"].(string); ok {
-			newV := make(map[string]interface{})
-			for key, val := range v {
-				if key == "value" {
-					// 转换 value 中的事件类型
-					switch val.(type) {
-					case string:
-						newV[key] = mapEventType(val.(string))
-					case []interface{}:
-						result := make([]interface{}, 0)
-						for _, item := range val.([]interface{}) {
-							if s, ok := item.(string); ok {
-								result = append(result, mapEventType(s))
-							} else {
-								result = append(result, item)
-							}
-						}
-						newV[key] = result
-					default:
-						newV[key] = val
-					}
-				} else {
-					newV[key] = val
-				}
-			}
-			// 添加 operator 字段（如果不存在）
-			if _, ok := newV["operator"]; !ok {
-				newV["operator"] = op
-			}
-			return newV
-		}
-		return value
-	default:
-		return value
-	}
 }
 
 // matchEventTypeString 事件类型别名匹配
@@ -1019,7 +784,6 @@ func matchEventTypeString(eventType, expected string) bool {
 	}
 
 	// 事件类型别名映射表
-	// 键是规则配置中使用的逻辑名称（别名），值是实际的事件类型
 	aliasMappings := map[string][]string{
 		"file_open":        {"openat"},
 		"file_modify":      {"write", "chmod", "chown", "rename"},
@@ -1045,16 +809,7 @@ func matchEventTypeString(eventType, expected string) bool {
 		"system_module":    {"init_module", "delete_module"},
 	}
 
-	// 建立反向映射：将实际事件类型名映射到别名
-	// 这样当 eventType 是实际名称（如 "openat"），expected 是别名（如 "file_open"）时也能正确匹配
-	reverseMappings := make(map[string][]string)
-	for alias, actualTypes := range aliasMappings {
-		for _, actualType := range actualTypes {
-			reverseMappings[actualType] = append(reverseMappings[actualType], alias)
-		}
-	}
-
-	// 检查 expected 是否是别名（正向映射）
+	// 检查 expected 是否是别名
 	if aliases, ok := aliasMappings[expectedLower]; ok {
 		for _, alias := range aliases {
 			if eventTypeLower == alias || eventType == alias {
@@ -1063,29 +818,10 @@ func matchEventTypeString(eventType, expected string) bool {
 		}
 	}
 
-	// 检查 eventType 是否是别名（反向映射）
+	// 检查 eventType 是否是别名，expected 是实际类型
 	if aliases, ok := aliasMappings[eventTypeLower]; ok {
 		for _, alias := range aliases {
 			if expectedLower == alias || expected == alias {
-				return true
-			}
-		}
-	}
-
-	// 额外检查：如果 eventType 是实际类型名，检查 expected 是否是对应的别名
-	// 例如：eventType="openat", expected="file_open" 时应该匹配
-	if reverseAliases, ok := reverseMappings[eventTypeLower]; ok {
-		for _, alias := range reverseAliases {
-			if expectedLower == alias {
-				return true
-			}
-		}
-	}
-
-	// 如果 expected 是实际类型名，检查 eventType 是否是对应的别名
-	if reverseAliases, ok := reverseMappings[expectedLower]; ok {
-		for _, alias := range reverseAliases {
-			if eventTypeLower == alias {
 				return true
 			}
 		}
@@ -1202,12 +938,17 @@ func (e *EnhancedRuleEngine) getFieldValue(event *EventJSON, field string) inter
 }
 
 // formatFileMode 将文件 mode 数值转换为标志字符串
-// 用于匹配规则中的正则表达式（如 ".*O_CREAT.*"）
+// 用于匹配规则中的正则表达式（如 ".*O_CREAT.*" 或 ".*[1457][0457][0457]$"）
+// 同时返回八进制格式（用于chmod权限匹配）和O_xxx格式（用于openat标志匹配）
 func formatFileMode(mode uint32) string {
 	if mode == 0 {
 		return ""
 	}
 	var flags []string
+
+	// 添加八进制格式（用于chmod权限匹配，如 "0755"）
+	octalStr := fmt.Sprintf("%04o", mode&0777)
+	flags = append(flags, octalStr)
 
 	// 文件访问模式 (O_ACCMODE = 0x3)
 	switch mode & 0x3 {
@@ -1287,16 +1028,6 @@ func (e *EnhancedRuleEngine) compareValues(a, b interface{}, op ComparisonOp) bo
 		if vb, ok := b.(float64); ok {
 			return float64(va) == vb
 		}
-	case float64:
-		if vb, ok := b.(float64); ok {
-			return va == vb
-		}
-		if vb, ok := b.(int); ok {
-			return va == float64(vb)
-		}
-		if vb, ok := b.(uint32); ok {
-			return va == float64(vb)
-		}
 	}
 	return false
 }
@@ -1329,17 +1060,84 @@ func (e *EnhancedRuleEngine) isWhitelisted(event *EventJSON) bool {
 		}
 	}
 
-	// 可以添加更多白名单检查逻辑
+	// 检查用户白名单
+	for _, user := range e.WhitelistConfig.Users {
+		// 支持UID数字和用户名匹配
+		if user == fmt.Sprintf("%d", event.UID) {
+			return true
+		}
+	}
+
+	// 检查文件白名单
+	if event.Filename != "" {
+		for _, file := range e.WhitelistConfig.Files {
+			if strings.HasPrefix(event.Filename, file) {
+				return true
+			}
+		}
+	}
+
+	// 检查网络白名单
+	if event.SrcAddr != nil {
+		srcIP := event.SrcAddr.IP
+		for _, network := range e.WhitelistConfig.Networks {
+			if isIPInNetwork(srcIP, network) {
+				return true
+			}
+		}
+	}
+	if event.DstAddr != nil {
+		dstIP := event.DstAddr.IP
+		for _, network := range e.WhitelistConfig.Networks {
+			if isIPInNetwork(dstIP, network) {
+				return true
+			}
+		}
+	}
+
 	return false
+}
+
+// isIPInNetwork 检查IP地址是否在指定的CIDR网络范围内
+func isIPInNetwork(ipStr, cidr string) bool {
+	// 处理单个IP地址
+	if !strings.Contains(cidr, "/") {
+		return ipStr == cidr
+	}
+
+	// 解析CIDR
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return false
+	}
+
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+
+	return ipNet.Contains(ip)
 }
 
 // 检查是否被节流
 func (e *EnhancedRuleEngine) isThrottled(rule *CompiledRule) bool {
-	if rule.Original.Throttle <= 0 {
-		return false
+	// 先检查全局节流配置
+	if e.GlobalConfig.AlertThrottleSeconds > 0 {
+		globalThrottle := time.Duration(e.GlobalConfig.AlertThrottleSeconds) * time.Second
+		if time.Since(rule.LastTriggered) < globalThrottle {
+			return true
+		}
 	}
 
-	return time.Since(rule.LastTriggered) < time.Duration(rule.Original.Throttle)*time.Second
+	// 再检查规则级别的节流配置
+	if rule.Original.Throttle > 0 {
+		ruleThrottle := time.Duration(rule.Original.Throttle) * time.Second
+		if time.Since(rule.LastTriggered) < ruleThrottle {
+			return true
+		}
+	}
+
+	return false
 }
 
 // 更新规则统计

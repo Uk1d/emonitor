@@ -51,7 +51,6 @@ type RawEvent struct {
 	RetCode    int32       `json:"ret_code"`
 	Comm       [16]byte    `json:"-"`
 	Filename   [256]byte   `json:"-"`
-	Cmdline    [1024]byte  `json:"-"`
 	Mode       uint32      `json:"mode"`
 	Size       uint64      `json:"size"`
 	Flags      uint32      `json:"flags"`
@@ -71,34 +70,35 @@ type RawEvent struct {
 
 // JSON输出事件结构
 type EventJSON struct {
-	Timestamp   string    `json:"timestamp"`
-	PID         uint32    `json:"pid"`
-	PPID        uint32    `json:"ppid"`
-	UID         uint32    `json:"uid"`
-	GID         uint32    `json:"gid"`
-	SyscallID   uint32    `json:"syscall_id"`
-	EventType   string    `json:"event_type"`
-	RetCode     int32     `json:"ret_code"`
-	Comm        string    `json:"comm"`
-	Cmdline     string    `json:"cmdline,omitempty"`
-	Filename    string    `json:"filename,omitempty"`
-	Mode        uint32    `json:"mode,omitempty"`
-	Size        uint64    `json:"size,omitempty"`
-	Flags       uint32    `json:"flags,omitempty"`
-	SrcAddr     *AddrJSON `json:"src_addr,omitempty"`
-	DstAddr     *AddrJSON `json:"dst_addr,omitempty"`
-	OldUID      uint32    `json:"old_uid,omitempty"`
-	OldGID      uint32    `json:"old_gid,omitempty"`
-	NewUID      uint32    `json:"new_uid,omitempty"`
-	NewGID      uint32    `json:"new_gid,omitempty"`
-	Addr        uint64    `json:"addr,omitempty"`
-	Len         uint64    `json:"len,omitempty"`
-	Prot        string    `json:"prot,omitempty"`
-	TargetComm  string    `json:"target_comm,omitempty"`
-	TargetPID   uint32    `json:"target_pid,omitempty"`
-	Signal      uint32    `json:"signal,omitempty"`
-	Severity    string    `json:"severity,omitempty"`
-	RuleMatched string    `json:"rule_matched,omitempty"`
+	Timestamp      string    `json:"timestamp"`
+	BpfTimestampNs uint64    `json:"bpf_timestamp_ns,omitempty"` // eBPF原始时间戳（纳秒，单调时钟）
+	PID            uint32    `json:"pid"`
+	PPID           uint32    `json:"ppid"`
+	UID            uint32    `json:"uid"`
+	GID            uint32    `json:"gid"`
+	SyscallID      uint32    `json:"syscall_id"`
+	EventType      string    `json:"event_type"`
+	RetCode        int32     `json:"ret_code"`
+	Comm           string    `json:"comm"`
+	Cmdline        string    `json:"cmdline,omitempty"`
+	Filename       string    `json:"filename,omitempty"`
+	Mode           uint32    `json:"mode,omitempty"`
+	Size           uint64    `json:"size,omitempty"`
+	Flags          uint32    `json:"flags,omitempty"`
+	SrcAddr        *AddrJSON `json:"src_addr,omitempty"`
+	DstAddr        *AddrJSON `json:"dst_addr,omitempty"`
+	OldUID         uint32    `json:"old_uid,omitempty"`
+	OldGID         uint32    `json:"old_gid,omitempty"`
+	NewUID         uint32    `json:"new_uid,omitempty"`
+	NewGID         uint32    `json:"new_gid,omitempty"`
+	Addr           uint64    `json:"addr,omitempty"`
+	Len            uint64    `json:"len,omitempty"`
+	Prot           string    `json:"prot,omitempty"`
+	TargetComm     string    `json:"target_comm,omitempty"`
+	TargetPID      uint32    `json:"target_pid,omitempty"`
+	Signal         uint32    `json:"signal,omitempty"`
+	Severity       string    `json:"severity,omitempty"`
+	RuleMatched    string    `json:"rule_matched,omitempty"`
 }
 
 // 地址JSON结构
@@ -203,36 +203,36 @@ func (et EventType) String() string {
 	}
 }
 
-// safeBytesToString 将字节数组转换为安全的UTF-8字符串
-// 对于无效的UTF-8序列，使用Unicode替换字符(U+FFFD)替换
-func safeBytesToString(b []byte) string {
+// 字节数组转字符串
+func bytesToString(b []byte) string {
 	n := bytes.IndexByte(b, 0)
 	if n == -1 {
 		n = len(b)
 	}
-	// 使用strconv.Quote将无效UTF-8字符转义，然后去除引号
-	// 或者直接用utf8.DecodeRune来检查并替换无效字符
-	result := make([]byte, 0, n)
-	for i := 0; i < n; i++ {
-		c := b[i]
-		// 简单处理：如果字节值在可打印ASCII范围(32-126)或为空白字符(9-13)，直接保留
-		// 其他字节作为无效字符替换为问号
-		if (c >= 32 && c <= 126) || c == 9 || c == 10 || c == 13 {
-			result = append(result, c)
-		} else {
-			result = append(result, '?')
+	// 清理非UTF-8字符和控制字符
+	cleaned := cleanStringForDisplay(b[:n])
+	return cleaned
+}
+
+// cleanStringForDisplay 清理字符串用于显示，移除非UTF-8字符和控制字符
+func cleanStringForDisplay(b []byte) string {
+	result := make([]rune, 0, len(b))
+	for _, r := range string(b) {
+		// 跳过空字符和控制字符（除了常见的制表符、换行符）
+		if r == 0 || (r < 32 && r != 9 && r != 10 && r != 13) {
+			continue
 		}
+		// 跳过无效的Unicode字符
+		if r == '\uFFFD' || r > 0x10FFFF {
+			continue
+		}
+		result = append(result, r)
 	}
 	return string(result)
 }
 
-// 字节数组转字符串（已废弃，请使用safeBytesToString）
-func bytesToString(b []byte) string {
-	return safeBytesToString(b)
-}
-
 func parseRawEvent(b []byte) (*RawEvent, error) {
-	if len(b) < 52 {
+	if len(b) < 428 {
 		return nil, fmt.Errorf("invalid event size: %d", len(b))
 	}
 	e := &RawEvent{}
@@ -245,83 +245,26 @@ func parseRawEvent(b []byte) (*RawEvent, error) {
 	e.EventType = binary.LittleEndian.Uint32(b[28:32])
 	e.RetCode = int32(binary.LittleEndian.Uint32(b[32:36]))
 	copy(e.Comm[:], b[36:52])
-
-	// filename: offset 52, size 256
-	if len(b) > 308 {
-		copy(e.Filename[:], b[52:min(308, len(b))])
-	}
-
-	// cmdline: offset 308, size 1024 - 未使用，跳过
-
-	// mode: offset 1332
-	if len(b) > 1336 {
-		e.Mode = binary.LittleEndian.Uint32(b[1332:1336])
-	}
-	// size: offset 1336
-	if len(b) > 1344 {
-		e.Size = binary.LittleEndian.Uint64(b[1336:1344])
-	}
-	// flags: offset 1344
-	if len(b) > 1348 {
-		e.Flags = binary.LittleEndian.Uint32(b[1344:1348])
-	}
-	// src_addr: offset 1348
-	if len(b) > 1350 {
-		e.SrcAddr.Family = binary.LittleEndian.Uint16(b[1348:1350])
-	}
-	if len(b) > 1352 {
-		e.SrcAddr.Port = binary.LittleEndian.Uint16(b[1350:1352])
-	}
-	if len(b) > 1368 {
-		copy(e.SrcAddr.Addr[:], b[1352:min(1368, len(b))])
-	}
-	// dst_addr: offset 1368
-	if len(b) > 1370 {
-		e.DstAddr.Family = binary.LittleEndian.Uint16(b[1368:1370])
-	}
-	if len(b) > 1372 {
-		e.DstAddr.Port = binary.LittleEndian.Uint16(b[1370:1372])
-	}
-	if len(b) > 1388 {
-		copy(e.DstAddr.Addr[:], b[1372:min(1388, len(b))])
-	}
-	// old_uid: offset 1388
-	if len(b) > 1392 {
-		e.OldUID = binary.LittleEndian.Uint32(b[1388:1392])
-	}
-	if len(b) > 1396 {
-		e.OldGID = binary.LittleEndian.Uint32(b[1392:1396])
-	}
-	if len(b) > 1400 {
-		e.NewUID = binary.LittleEndian.Uint32(b[1396:1400])
-	}
-	if len(b) > 1404 {
-		e.NewGID = binary.LittleEndian.Uint32(b[1400:1404])
-	}
-	// addr: offset 1408
-	if len(b) > 1416 {
-		e.Addr = binary.LittleEndian.Uint64(b[1408:1416])
-	}
-	// len: offset 1416
-	if len(b) > 1424 {
-		e.Len = binary.LittleEndian.Uint64(b[1416:1424])
-	}
-	// prot: offset 1424
-	if len(b) > 1428 {
-		e.Prot = binary.LittleEndian.Uint32(b[1424:1428])
-	}
-	// target_comm: offset 1428
-	if len(b) > 1444 {
-		copy(e.TargetComm[:], b[1428:min(1444, len(b))])
-	}
-	// target_pid: offset 1444
-	if len(b) > 1448 {
-		e.TargetPID = binary.LittleEndian.Uint32(b[1444:1448])
-	}
-	// signal: offset 1448
-	if len(b) > 1452 {
-		e.Signal = binary.LittleEndian.Uint32(b[1448:1452])
-	}
+	copy(e.Filename[:], b[52:308])
+	e.Mode = binary.LittleEndian.Uint32(b[308:312])
+	e.Size = binary.LittleEndian.Uint64(b[312:320])
+	e.Flags = binary.LittleEndian.Uint32(b[320:324])
+	e.SrcAddr.Family = binary.LittleEndian.Uint16(b[324:326])
+	e.SrcAddr.Port = binary.LittleEndian.Uint16(b[326:328])
+	copy(e.SrcAddr.Addr[:], b[328:344])
+	e.DstAddr.Family = binary.LittleEndian.Uint16(b[344:346])
+	e.DstAddr.Port = binary.LittleEndian.Uint16(b[346:348])
+	copy(e.DstAddr.Addr[:], b[348:364])
+	e.OldUID = binary.LittleEndian.Uint32(b[364:368])
+	e.OldGID = binary.LittleEndian.Uint32(b[368:372])
+	e.NewUID = binary.LittleEndian.Uint32(b[372:376])
+	e.NewGID = binary.LittleEndian.Uint32(b[376:380])
+	e.Addr = binary.LittleEndian.Uint64(b[384:392])
+	e.Len = binary.LittleEndian.Uint64(b[392:400])
+	e.Prot = binary.LittleEndian.Uint32(b[400:404])
+	copy(e.TargetComm[:], b[404:420])
+	e.TargetPID = binary.LittleEndian.Uint32(b[420:424])
+	e.Signal = binary.LittleEndian.Uint32(b[424:428])
 	return e, nil
 }
 
@@ -329,13 +272,13 @@ func parseRawEvent(b []byte) (*RawEvent, error) {
 func protToString(prot uint32) string {
 	var flags []string
 	if prot&0x1 != 0 {
-		flags = append(flags, "READ")
+		flags = append(flags, "PROT_READ")
 	}
 	if prot&0x2 != 0 {
-		flags = append(flags, "WRITE")
+		flags = append(flags, "PROT_WRITE")
 	}
 	if prot&0x4 != 0 {
-		flags = append(flags, "EXEC")
+		flags = append(flags, "PROT_EXEC")
 	}
 	return strings.Join(flags, "|")
 }
@@ -349,12 +292,90 @@ func familyToString(family uint16) string {
 		return "AF_UNIX"
 	case 2:
 		return "AF_INET"
+	case 3:
+		return "AF_AX25"
+	case 4:
+		return "AF_IPX"
+	case 5:
+		return "AF_APPLETALK"
+	case 6:
+		return "AF_NETROM"
+	case 7:
+		return "AF_BRIDGE"
+	case 8:
+		return "AF_ATMPVC"
+	case 9:
+		return "AF_X25"
 	case 10:
 		return "AF_INET6"
+	case 11:
+		return "AF_ROSE"
+	case 12:
+		return "AF_DECnet"
+	case 13:
+		return "AF_NETBEUI"
+	case 14:
+		return "AF_SECURITY"
+	case 15:
+		return "AF_KEY"
 	case 16:
 		return "AF_NETLINK"
 	case 17:
 		return "AF_PACKET"
+	case 18:
+		return "AF_ASH"
+	case 19:
+		return "AF_ECONET"
+	case 20:
+		return "AF_ATMSVC"
+	case 21:
+		return "AF_RDS"
+	case 22:
+		return "AF_SNA"
+	case 23:
+		return "AF_IRDA"
+	case 24:
+		return "AF_PPPOX"
+	case 25:
+		return "AF_WANPIPE"
+	case 26:
+		return "AF_LLC"
+	case 27:
+		return "AF_IB"
+	case 28:
+		return "AF_MPLS"
+	case 29:
+		return "AF_CAN"
+	case 30:
+		return "AF_TIPC"
+	case 31:
+		return "AF_BLUETOOTH"
+	case 32:
+		return "AF_IUCV"
+	case 33:
+		return "AF_RXRPC"
+	case 34:
+		return "AF_ISDN"
+	case 35:
+		return "AF_PHONET"
+	case 36:
+		return "AF_IEEE802154"
+	case 37:
+		return "AF_CAIF"
+	case 38:
+		return "AF_ALG"
+	case 39:
+		return "AF_NFC"
+	case 40:
+		return "AF_VSOCK"
+	case 41:
+		return "AF_KCM"
+	case 42:
+		return "AF_QIPCRTR"
+	case 43:
+		return "AF_SMC"
+	case 44:
+		return "AF_XDP"
 	default:
 		return fmt.Sprintf("AF_%d", family)
 	}
@@ -379,8 +400,9 @@ func addrToString(addr NetworkAddr) *AddrJSON {
 		result.Port = ntohs(addr.Port)
 		result.IP = net.IP(addr.Addr[:]).String()
 	default:
-		// 非IP地址族，不设置IP与端口
-		return nil
+		// 非IP地址族（如AF_UNIX/DECnet等）不设置IP与端口
+		result.Port = 0
+		result.IP = ""
 	}
 
 	return result
@@ -393,30 +415,27 @@ func ntohs(port uint16) uint16 {
 
 // 转换原始事件为JSON格式
 func convertToJSON(raw *RawEvent) *EventJSON {
-	// 修复时间戳：由于eBPF使用bpf_ktime_get_ns()返回单调时钟
-	// 而事件是实时处理的，直接使用当前时间更准确
+	// 使用当前时间作为事件时间戳
+	// eBPF时间戳是单调时钟，无法直接转换为绝对时间
+	// 但可以用于计算事件之间的时间差
 	timestamp := time.Now()
 
 	event := &EventJSON{
-		Timestamp: timestamp.Format(time.RFC3339Nano),
-		PID:       raw.PID,
-		PPID:      raw.PPID,
-		UID:       raw.UID,
-		GID:       raw.GID,
-		SyscallID: raw.SyscallID,
-		EventType: EventType(raw.EventType).String(),
-		RetCode:   raw.RetCode,
-		Comm:      bytesToString(raw.Comm[:]),
+		Timestamp:      timestamp.Format(time.RFC3339Nano),
+		BpfTimestampNs: raw.Timestamp, // 保存原始eBPF时间戳用于时间差计算
+		PID:            raw.PID,
+		PPID:           raw.PPID,
+		UID:            raw.UID,
+		GID:            raw.GID,
+		SyscallID:      raw.SyscallID,
+		EventType:      EventType(raw.EventType).String(),
+		RetCode:        raw.RetCode,
+		Comm:           bytesToString(raw.Comm[:]),
 	}
 
 	// 文件名
 	if filename := bytesToString(raw.Filename[:]); filename != "" {
 		event.Filename = filename
-	}
-
-	// 命令行参数（从BPF直接捕获）
-	if cmdline := bytesToString(raw.Cmdline[:]); cmdline != "" {
-		event.Cmdline = cmdline
 	}
 
 	// 模式和标志
@@ -481,73 +500,23 @@ func convertToJSON(raw *RawEvent) *EventJSON {
 }
 
 // 补充事件的命令行：仅在Linux可用，读取 /proc/<pid>/cmdline
-// 优先使用BPF已捕获的cmdline，如果为空则尝试从proc读取
 func enrichEventCmdline(event *EventJSON) {
 	if runtime.GOOS != "linux" {
 		return
 	}
-	// 优先使用BPF已捕获的cmdline
-	if event.Cmdline != "" {
-		// 对于 execve/execveat 事件，如果 filename 是相对路径，尝试从 cmdline 中查找实际路径
-		if event.EventType == "execve" || event.EventType == "execveat" {
-			if len(event.Filename) > 0 && event.Filename[0] != '/' {
-				parts := strings.Fields(event.Cmdline)
-				for i := 1; i < len(parts); i++ {
-					if strings.HasPrefix(parts[i], "/") {
-						event.Filename = parts[i]
-						break
-					}
-				}
-			}
-		}
-		return
-	}
-
-	// BPF未捕获cmdline时，从/proc/<pid>/cmdline读取（作为后备方案）
-	// 为所有进程相关事件尝试填充命令行参数
+	// 仅在进程类事件中尝试填充，避免无意义的开销
 	switch event.EventType {
-	case "execve", "execveat", "fork", "clone", "exit",
-		"setuid", "setgid", "setreuid", "setregid", "setresuid", "setresgid",
-		"prctl", "ptrace", "kill", "mmap", "mprotect", "munmap", "mremap",
-		"mount", "umount", "init_module", "delete_module", "setns", "unshare",
-		"chmod", "chown", "unlink", "rename", "openat", "open", "openat2", "close", "read", "write",
-		"connect", "bind", "listen", "accept", "sendto", "recvfrom", "socket", "shutdown":
+	case "execve", "fork", "clone", "exit":
 		// 读取cmdline（以\0分隔），转换为空格分隔的字符串
 		path := fmt.Sprintf("/proc/%d/cmdline", event.PID)
 		data, err := os.ReadFile(path)
-		if err != nil {
+		if err != nil || len(data) == 0 {
 			return
 		}
-		if len(data) == 0 {
-			return
-		}
-		// 将\0分隔的字节转换为安全字符串
-		safeData := safeBytesToString(data)
-		s := strings.ReplaceAll(safeData, "\x00", " ")
+		s := strings.ReplaceAll(string(data), "\x00", " ")
 		s = strings.TrimSpace(s)
 		if s != "" {
 			event.Cmdline = s
-			// 对于 execve/execveat 事件
-			// 如果原始 filename 是相对路径（如 "bash"），尝试从 cmdline 中查找实际路径
-			// 这样可以正确匹配如 /tmp/.* 这类规则
-			if event.EventType == "execve" || event.EventType == "execveat" {
-				parts := strings.Fields(s)
-				if len(parts) > 0 {
-					// 原始 filename 是相对路径
-					if len(event.Filename) > 0 && event.Filename[0] != '/' {
-						// 从 cmdline 中查找是否有绝对路径（第二个参数可能是实际脚本路径）
-						for i := 1; i < len(parts); i++ {
-							if strings.HasPrefix(parts[i], "/") {
-								event.Filename = parts[i]
-								break
-							}
-						}
-					} else if len(event.Filename) == 0 {
-						// 如果原始 filename 为空，使用第一个参数
-						event.Filename = parts[0]
-					}
-				}
-			}
 		}
 	}
 }
@@ -730,7 +699,7 @@ func main() {
 		EnableAutoResolve:    true,
 		AutoResolveTimeout:   24 * time.Hour,
 		EnableNotifications:  true,
-		NotificationDelay:    0,
+		NotificationDelay:    30 * time.Second,
 		PersistAlerts:        true,
 		AlertStoragePath:     "data/alerts",
 	}
@@ -1614,58 +1583,27 @@ func main() {
 			alerts := ruleEngine.MatchRules(event)
 
 			// AI 异常检测（异步，避免阻塞主处理流程）
-			// AI检测到的异常会创建专门的AI检测告警，与规则引擎告警区分开
-			// 注意：AI检测是独立的，不影响原始规则引擎的结果
 			go func(evt *EventJSON) {
-				anomalyResult, err := pythonClient.DetectEvent(evt)
-				if err != nil {
-					// AI检测失败时静默处理，不影响主流程
-					// 原始规则引擎的告警已经同步处理，不依赖AI检测结果
-					log.Printf("[*] AI检测服务暂时不可用: %v", err)
-					return
-				}
-				if anomalyResult == nil {
-					return
-				}
-				// 检查是否有异常检测结果
-				if anomalyData, ok := (*anomalyResult)["anomaly"].(map[string]interface{}); ok && anomalyData != nil {
-					log.Printf("[*] AI 检测到异常: %s", anomalyData["description"])
-
-					// 从异常数据中提取信息创建告警
-					severity, _ := anomalyData["severity"].(string)
-					if severity == "" {
-						severity = "medium"
-					}
-					category, _ := anomalyData["category"].(string)
-					if category == "" {
-						category = "ai_detection"
-					}
-					description, _ := anomalyData["description"].(string)
-					if description == "" {
-						description = "AI检测到异常行为"
-					}
-
-					// 创建AI检测告警事件
-					aiAlert := &AlertEvent{
-						RuleName:    "AI异常检测",
-						Description: description,
-						Severity:    severity,
-						Category:    category,
-						Timestamp:   time.Now(),
-						Event:       evt,
-					}
-
-					// 使用告警管理器处理AI检测告警
-					if managedAlert, err := alertManager.ProcessAlert(*aiAlert); err == nil {
-						log.Printf("[!] AI检测告警已创建: ID=%s, 类别=%s, 严重级别=%s",
-							managedAlert.ID, managedAlert.Category, managedAlert.Severity)
-
-						// WebSocket实时推送
-						if alertAPI != nil {
-							alertAPI.BroadcastAlert(managedAlert)
+				if anomalyResult, err := pythonClient.DetectEvent(evt); err == nil && anomalyResult != nil {
+					if anomaly, ok := (*anomalyResult)["anomaly"].(map[string]interface{}); ok {
+						log.Printf("[*] AI 检测到异常: %s", anomaly["description"])
+						// 创建 AI 告警
+						aiAlert := &AlertEvent{
+							RuleName:    "AI异常检测",
+							Description: fmt.Sprintf("%v", anomaly["description"]),
+							Severity:    fmt.Sprintf("%v", anomaly["severity"]),
+							Category:    "ai",
+							Timestamp:   time.Now(),
 						}
-						if wsServer != nil {
-							wsServer.BroadcastAlert(managedAlert)
+						// 处理 AI 告警
+						if managedAlert, err := alertManager.ProcessAlert(*aiAlert); err == nil {
+							// WebSocket 推送 AI 告警
+							if alertAPI != nil {
+								alertAPI.BroadcastAlert(managedAlert)
+							}
+							if wsServer != nil {
+								wsServer.BroadcastAlert(managedAlert)
+							}
 						}
 					}
 				}
@@ -1684,11 +1622,41 @@ func main() {
 				}
 			}
 
+			// 处理告警事件并检测攻击链
+			for _, alert := range alerts {
+				// 创建AlertEvent结构体
+				alertEvent := &AlertEvent{
+					RuleName:    alert.RuleName,
+					Description: alert.Description,
+					Severity:    alert.Severity,
+					Category:    alert.Category,
+					Timestamp:   time.Now(),
+				}
+
+				// 检测攻击链
+				eventContext.DetectAttackChain(event, alertEvent)
+			}
+
+			// 无告警事件：如果存在相关攻击链则更新（不新建），以避免评分停滞
+			if len(alerts) == 0 {
+				eventContext.DetectAttackChain(event, nil)
+			}
+
+			// 获取并显示攻击链（仅输出本次事件更新的链，避免重复噪声）
+			if attackChains := eventContext.GetAttackChains(); len(attackChains) > 0 {
+				for _, chain := range attackChains {
+					if chain.LastUpdate.After(eventStartTime) || chain.LastUpdate.Equal(eventStartTime) {
+						log.Printf("[*] 检测到攻击链: ID=%s, 阶段=%s, 风险级别=%s, 危害评分=%.2f",
+							chain.ID, chain.CurrentStage, chain.RiskLevel, chain.ImpactScore)
+					}
+				}
+			}
+
 			// 记录事件处理性能
 			eventProcessingTime := time.Since(eventStartTime)
 			perfMonitor.RecordEvent(eventProcessingTime)
 
-			// 处理告警事件并检测攻击链（合并处理，避免重复）
+			// 处理告警事件
 			for _, alert := range alerts {
 				// 更新事件的告警信息
 				event.Severity = alert.Severity
@@ -1718,39 +1686,6 @@ func main() {
 				if wsServer != nil {
 					wsServer.BroadcastAlert(managedAlert)
 				}
-
-				// 创建AlertEvent结构体用于攻击链检测
-				alertEvent := &AlertEvent{
-					RuleName:    alert.RuleName,
-					Description: alert.Description,
-					Severity:    alert.Severity,
-					Category:    alert.Category,
-					Timestamp:   time.Now(),
-					Event:       event,
-				}
-
-				// 检测攻击链
-				eventContext.DetectAttackChain(event, alertEvent)
-
-				// 发送告警到 Python 服务用于报告生成（同步发送确保数据不丢失）
-				if err := pythonClient.SendAlert(alertEvent); err != nil {
-					log.Printf("发送告警到Python服务失败: %v", err)
-				}
-			}
-
-			// 无告警事件：如果存在相关攻击链则更新（不新建），以避免评分停滞
-			if len(alerts) == 0 {
-				eventContext.DetectAttackChain(event, nil)
-			}
-
-			// 获取并显示攻击链（仅输出本次事件更新的链，避免重复噪声）
-			if attackChains := eventContext.GetAttackChains(); len(attackChains) > 0 {
-				for _, chain := range attackChains {
-					if chain.LastUpdate.After(eventStartTime) || chain.LastUpdate.Equal(eventStartTime) {
-						log.Printf("[*] 检测到攻击链: ID=%s, 阶段=%s, 风险级别=%s, 危害评分=%.2f",
-							chain.ID, chain.CurrentStage, chain.RiskLevel, chain.ImpactScore)
-					}
-				}
 			}
 
 			// 更新Dashboard统计（如果启用）
@@ -1765,10 +1700,7 @@ func main() {
 				}
 			}
 
-			// 发送事件到 Python 服务用于 AI 检测和报告生成（同步发送确保数据不丢失）
-			if err := pythonClient.SendEvents([]*EventJSON{event}); err != nil {
-				// 静默处理错误，避免噪声
-			}
+			// 告警生成由规则引擎与告警管理器统一处理，移除重复路径
 
 			// 输出JSON
 			if jsonData, err := json.Marshal(event); err == nil {

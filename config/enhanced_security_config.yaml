@@ -28,8 +28,9 @@ detection_rules:
         这是凭证窃取行为的典型特征，攻击者常通过读取这些文件来获取用户信息和密码哈希。
         MITRE ATT&CK: T1555 - Credentials from Password Stores
       conditions:
-        - event_type: "regex:^(openat|read)$"
+        - event_type: file_open
         - filename: "regex:/etc/(passwd|shadow|sudoers|group|gshadow|security/opasswd)"
+        - uid: ">=1000"
       severity: medium
       logic_operator: AND
       tags:
@@ -40,30 +41,6 @@ detection_rules:
         - T1555
       enabled: true
       throttle_seconds: 60
-      actions:
-        - log
-      category: file
-
-    # 检测root用户读取敏感文件（高风险）
-    - name: Read sensitive file by root
-      description: |
-        root用户读取敏感文件（如/etc/passwd、/etc/shadow等）。
-        即使是root用户，读取这些文件也可能是不正常的行为，需要审计。
-        MITRE ATT&CK: T1555 - Credentials from Password Stores
-      conditions:
-        - event_type: "regex:^(openat|read)$"
-        - filename: "regex:/etc/(passwd|shadow|sudoers|gshadow)"
-        - uid: 0
-      severity: high
-      logic_operator: AND
-      tags:
-        - maturity_stable
-        - host
-        - filesystem
-        - mitre_credential_access
-        - T1555
-      enabled: true
-      throttle_seconds: 30
       actions:
         - log
       category: file
@@ -96,7 +73,7 @@ detection_rules:
         攻击者可能窃取SSH私钥以实现横向移动或持久访问。
         MITRE ATT&CK: T1552.004 - Credentials from Password Stores: Private Keys
       conditions:
-        - event_type: "regex:^(openat|read|file_open)$"
+        - event_type: file_open
         - filename: "regex:.*id_(rsa|dsa|ecdsa|ed25519)(\\.pub)?$"
       severity: medium
       logic_operator: AND
@@ -139,7 +116,7 @@ detection_rules:
         检测清除关键访问日志文件的行为，通常是攻击者试图销毁证据。
         MITRE ATT&CK: T1070.001 - Indicator Removal on Host: Clear Linux or Mac System Logs
       conditions:
-        - event_type: "regex:^(openat|read|file_open)$"
+        - event_type: file_open
         - filename: "regex:/var/log/(auth\\.log|secure|syslog|messages|kern\\.log|audit/audit\\.log)"
         - mode: "regex:.*O_TRUNC.*"
       severity: high
@@ -183,7 +160,7 @@ detection_rules:
         在关键系统目录创建文件，可能是恶意软件持久化或提权尝试。
         MITRE ATT&CK: T1547 - Boot or Logon Autostart Execution
       conditions:
-        - event_type: "regex:^(openat|read|file_open)$"
+        - event_type: file_open
         - filename: "regex:/etc/(cron\\.d|cron\\.daily|cron\\.hourly|cron\\.monthly|cron\\.weekly|init\\.d|systemd/system|rc\\.local|profile\\.d)/.*"
         - mode: "regex:.*O_CREAT.*"
       severity: medium
@@ -205,7 +182,7 @@ detection_rules:
         创建隐藏文件（以.开头），攻击者常用此方式隐藏恶意文件。
         MITRE ATT&CK: T1564.001 - Hide Artifacts: Hidden Files and Directories
       conditions:
-        - event_type: "regex:^(openat|read|file_open)$"
+        - event_type: file_open
         - filename: "regex:.*/\\.[^/]+$"
         - mode: "regex:.*O_CREAT.*"
       severity: low
@@ -227,7 +204,7 @@ detection_rules:
         从/dev/shm执行文件，这是内存文件系统，常被攻击者用于运行无文件恶意软件。
         MITRE ATT&CK: T1059.004 - Command and Scripting Interpreter: Bash
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - filename: "regex:/dev/shm/.*"
       severity: high
       logic_operator: AND
@@ -246,7 +223,7 @@ detection_rules:
       description: |
         从/tmp目录执行文件，攻击者常在此目录存放和执行恶意程序。
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - filename: "regex:/tmp/.*"
         - comm: "regex:^(bash|sh|python|perl|ruby|php)$"
       severity: medium
@@ -293,7 +270,7 @@ detection_rules:
         Netcat常被用于建立反向Shell或端口转发。
         MITRE ATT&CK: T1059 - Command and Scripting Interpreter
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - comm: "regex:^(nc|ncat|netcat)$"
       severity: high
       logic_operator: AND
@@ -403,6 +380,7 @@ detection_rules:
         MITRE ATT&CK: T1571 - Non-Standard Port
       conditions:
         - event_type: listen
+        - uid: ">=1000"
         - dst_addr.port: "<1024"
       severity: high
       logic_operator: AND
@@ -418,28 +396,6 @@ detection_rules:
         - log
       category: network
 
-    # 检测root用户监听端口
-    - name: Root user listening on port
-      description: |
-        root用户监听网络端口，可能是不正常的行为。
-        MITRE ATT&CK: T1571 - Non-Standard Port
-      conditions:
-        - event_type: listen
-        - uid: 0
-      severity: medium
-      logic_operator: AND
-      tags:
-        - maturity_stable
-        - host
-        - network
-        - mitre_persistence
-        - T1571
-      enabled: true
-      throttle_seconds: 60
-      actions:
-        - log
-      category: network
-
   # ==================== 进程安全规则 ====================
   process:
     # ----- 权限提升检测 -----
@@ -448,8 +404,9 @@ detection_rules:
         通过sudo进行权限提升。监控sudo命令的使用，特别是成功的提权行为。
         MITRE ATT&CK: T1548.003 - Abuse Elevation Control Mechanisms: Sudo
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - comm: "regex:^(sudo|su)$"
+        - uid: ">=1000"
       severity: medium
       logic_operator: AND
       tags:
@@ -469,8 +426,9 @@ detection_rules:
         执行SUID二进制文件，攻击者常利用SUID程序进行权限提升。
         MITRE ATT&CK: T1548.001 - Abuse Elevation Control Mechanisms: Setuid and Setgid
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - filename: "regex:/usr/bin/(sudo|passwd|chsh|chfn|gpasswd|newgrp|su|pkexec)$"
+        - uid: ">=1000"
       severity: medium
       logic_operator: AND
       tags:
@@ -490,7 +448,7 @@ detection_rules:
         用户被添加到特权组（root、sudo、wheel等）。
         MITRE ATT&CK: T1098 - Account Manipulation
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - cmdline: "regex:.*(usermod|gpasswd|adduser).*(root|sudo|wheel|admin|docker).*"
       severity: critical
       logic_operator: AND
@@ -511,10 +469,12 @@ detection_rules:
       description: |
         Web服务器进程启动Shell，通常是Web应用漏洞利用的迹象。
         MITRE ATT&CK: T1505.003 - Server Software Component: Web Shell
+        仅检测Web服务器进程（如nginx、apache、httpd、node等）启动的Shell。
+        注意：此规则需要父进程信息，如果无法获取父进程comm，将不会触发。
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - comm: "regex:^(bash|sh|zsh|fish|dash|ksh)$"
-        - ppid: ">=1"
+        - ppid: ">1"
       severity: critical
       logic_operator: AND
       tags:
@@ -534,8 +494,9 @@ detection_rules:
         非特权用户启动Shell会话，可能是RCE成功后的行为。
         MITRE ATT&CK: T1059.004 - Command and Scripting Interpreter: Bash
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - comm: "regex:^(bash|sh|zsh|fish|dash|ksh)$"
+        - uid: ">=1000"
       severity: low
       logic_operator: AND
       tags:
@@ -550,104 +511,13 @@ detection_rules:
         - log
       category: process
 
-    # 检测root用户执行shell
-    - name: Root shell execution
-      description: |
-        root用户执行Shell，可能是异常行为。
-        MITRE ATT&CK: T1059.004 - Command and Scripting Interpreter: Bash
-      conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
-        - comm: "regex:^(bash|sh|zsh|fish|dash|ksh)$"
-        - uid: 0
-      severity: medium
-      logic_operator: AND
-      tags:
-        - maturity_stable
-        - host
-        - process
-        - mitre_execution
-        - T1059.004
-      enabled: true
-      throttle_seconds: 60
-      actions:
-        - log
-      category: process
-
-    # 检测root用户执行敏感命令读取文件
-    - name: Root read sensitive file
-      description: |
-        root用户使用敏感命令读取系统文件，可能是异常行为。
-        MITRE ATT&CK: T1555 - Credentials from Password Stores
-      conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
-        - comm: "regex:^(cat|head|tail|less|more|grep|awk|vim|nano|strings|xxd|file|stat)$"
-        - uid: 0
-      severity: medium
-      logic_operator: AND
-      tags:
-        - maturity_stable
-        - host
-        - process
-        - mitre_credential_access
-        - T1555
-      enabled: true
-      throttle_seconds: 60
-      actions:
-        - log
-      category: process
-
     # ----- 敏感命令检测 -----
-    - name: Read sensitive system files
-      description: |
-        读取敏感系统文件，如密码文件、组文件等。
-        攻击者常通过读取这些文件来收集系统信息或进行凭据窃取。
-        MITRE ATT&CK: T1555 - Credentials from Password Stores
-      conditions:
-        - event_type: "regex:^(execve|execveat|process_create|openat|read)$"
-        - filename: "regex:.*(/etc/passwd|/etc/shadow|/etc/group|/etc/gshadow|/etc/sudoers).*"
-      severity: medium
-      logic_operator: AND
-      tags:
-        - maturity_stable
-        - host
-        - process
-        - mitre_credential_access
-        - T1555
-      enabled: true
-      throttle_seconds: 60
-      actions:
-        - log
-      category: process
-
-    # 检测 /tmp 目录下执行脚本和可执行文件
-    - name: Execution from /tmp
-      description: |
-        在 /tmp 目录下执行脚本或可执行文件，这通常是恶意软件或攻击者常用的行为。
-        攻击者常利用 /tmp 目录存放和执行恶意代码，因为该目录通常可写且不被监控。
-        MITRE ATT&CK: T1059 - Command and Scripting Interpreter
-      conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
-        - comm: "regex:^(bash|sh|python|python3|perl|ruby|php|node|lua|tcl|expect)$"
-        - cmdline: "regex:^.*(/tmp|/var/tmp|/dev/shm).*"
-      severity: medium
-      logic_operator: AND
-      tags:
-        - maturity_stable
-        - host
-        - process
-        - mitre_execution
-      enabled: true
-      throttle_seconds: 60
-      actions:
-        - log
-      category: process
-
     - name: Password file manipulation
       description: |
         操作密码相关文件，可能是添加后门账户或修改认证配置。
         MITRE ATT&CK: T1098 - Account Manipulation
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - cmdline: "regex:.*(passwd|chpasswd|useradd|usermod|userdel|adduser).*(root|admin).*"
       severity: high
       logic_operator: AND
@@ -668,7 +538,7 @@ detection_rules:
         修改cron任务，攻击者常用的持久化手段。
         MITRE ATT&CK: T1053.003 - Scheduled Task/Job: Cron
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - cmdline: "regex:.*(crontab|cron).*(-e|-l|-r).*"
       severity: medium
       logic_operator: AND
@@ -689,7 +559,7 @@ detection_rules:
         操作systemd服务，可能用于持久化或禁用安全服务。
         MITRE ATT&CK: T1543.002 - Create or Modify System Process: Systemd Service
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - cmdline: "regex:.*systemctl.*(enable|disable|start|stop|restart|create).*"
       severity: medium
       logic_operator: AND
@@ -711,7 +581,7 @@ detection_rules:
         可疑的脚本执行行为，包括从网络下载并执行脚本。
         MITRE ATT&CK: T1059 - Command and Scripting Interpreter
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - cmdline: "regex:.*(curl|wget).*\\|.*(bash|sh|python|perl).*"
       severity: critical
       logic_operator: AND
@@ -732,7 +602,7 @@ detection_rules:
         Python反向Shell，攻击者常用的远程控制手段。
         MITRE ATT&CK: T1059.006 - Command and Scripting Interpreter: Python
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - cmdline: "regex:.*python.*socket.*PTY.*"
       severity: critical
       logic_operator: AND
@@ -753,7 +623,7 @@ detection_rules:
         Perl反向Shell，另一种常见的远程控制手段。
         MITRE ATT&CK: T1059.010 - Command and Scripting Interpreter: Perl
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - cmdline: "regex:.*perl.*socket.*"
       severity: critical
       logic_operator: AND
@@ -838,6 +708,7 @@ detection_rules:
         MITRE ATT&CK: T1222.002 - Linux and Mac File and Directory Permissions Modification
       conditions:
         - event_type: chown
+        - uid: ">=1000"
       severity: low
       logic_operator: AND
       tags:
@@ -851,34 +722,13 @@ detection_rules:
         - log
       category: permission
 
-    # 检测root用户执行chown
-    - name: Root chown execution
-      description: |
-        root用户执行chown变更文件所有者，可能是异常行为。
-        MITRE ATT&CK: T1222.002 - Linux and Mac File and Directory Permissions Modification
-      conditions:
-        - event_type: chown
-        - uid: 0
-      severity: medium
-      logic_operator: AND
-      tags:
-        - maturity_stable
-        - host
-        - mitre_defense_evasion
-        - T1222.002
-      enabled: true
-      throttle_seconds: 60
-      actions:
-        - log
-      category: permission
-
     # ----- Capabilities操作 -----
     - name: Setcap execution
       description: |
         设置文件capabilities，可能被用于权限提升。
         MITRE ATT&CK: T1548.001 - Abuse Elevation Control Mechanisms: Setuid and Setgid
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - comm: "setcap"
       severity: high
       logic_operator: AND
@@ -900,9 +750,11 @@ detection_rules:
         使用mprotect设置内存为可读写执行，这是代码注入的典型特征。
         攻击者常使用此技术注入shellcode。
         MITRE ATT&CK: T1055 - Process Injection
+        排除常见的合法进程，减少误报。
       conditions:
         - event_type: mprotect
         - prot: "PROT_READ|PROT_WRITE|PROT_EXEC"
+        - comm: "not_regex:^(bash|sh|zsh|fish|dash|ksh|csh|tcsh|awk|sed|grep|find|vim|nano|less|more|man|ssh|scp|sftp|gpg|sudo|su|login|systemd|dbus|Xorg|Xwayland|kwin|gnome|firefox|chrome|chromium|electron)$"
       severity: critical
       logic_operator: AND
       tags:
@@ -920,9 +772,11 @@ detection_rules:
       description: |
         映射可执行内存区域，可能是shellcode注入或JIT编译行为。
         MITRE ATT&CK: T1055 - Process Injection
+        排除常见的合法进程（shell、终端、浏览器等），减少误报。
       conditions:
         - event_type: mmap
         - prot: "regex:.*PROT_EXEC.*"
+        - comm: "not_regex:^(bash|sh|zsh|fish|dash|ksh|csh|tcsh|awk|sed|grep|find|vim|nano|less|more|man|ssh|scp|sftp|gpg|sudo|su|login|systemd|dbus|Xorg|Xwayland|kwin|gnome|firefox|chrome|chromium|electron)$"
       severity: high
       logic_operator: AND
       tags:
@@ -941,7 +795,7 @@ detection_rules:
         使用memfd_create创建内存文件，这是无文件恶意软件的典型技术。
         MITRE ATT&CK: T1620 - Reflective Code Loading
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - filename: "regex:/memfd:.*"
       severity: critical
       logic_operator: AND
@@ -964,7 +818,7 @@ detection_rules:
         加载内核模块，可能是rootkit或内核级恶意软件。
         MITRE ATT&CK: T1547.006 - Boot or Logon Autostart Execution: Kernel Modules and Extensions
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - comm: "regex:^(insmod|modprobe)$"
       severity: critical
       logic_operator: AND
@@ -984,7 +838,7 @@ detection_rules:
         卸载内核模块，可能是为了禁用安全软件。
         MITRE ATT&CK: T1547.006 - Boot or Logon Autostart Execution: Kernel Modules and Extensions
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - comm: "rmmod"
       severity: high
       logic_operator: AND
@@ -1005,7 +859,7 @@ detection_rules:
         创建新用户账户，可能是攻击者建立持久访问。
         MITRE ATT&CK: T1136.001 - Create Account: Local Account
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - comm: "regex:^(useradd|adduser)$"
       severity: high
       logic_operator: AND
@@ -1025,7 +879,7 @@ detection_rules:
         删除用户账户，可能是攻击者清理痕迹或破坏系统。
         MITRE ATT&CK: T1531 - Account Access Removal
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - comm: "regex:^(userdel|deluser)$"
       severity: high
       logic_operator: AND
@@ -1046,7 +900,7 @@ detection_rules:
         修改iptables规则，可能是为了禁用防火墙或开放后门端口。
         MITRE ATT&CK: T1562.004 - Impair Defenses: Disable or Modify System Firewall
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - comm: "iptables"
       severity: high
       logic_operator: AND
@@ -1066,7 +920,7 @@ detection_rules:
         修改SELinux配置，可能是为了禁用安全模块。
         MITRE ATT&CK: T1562.001 - Impair Defenses: Disable or Modify Tools
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - cmdline: "regex:.*(setenforce|semanage|semodule).*(0|permissive|disabled).*"
       severity: critical
       logic_operator: AND
@@ -1087,7 +941,7 @@ detection_rules:
         搜索敏感凭据文件，攻击者常用的信息收集手段。
         MITRE ATT&CK: T1552 - Credentials in Files
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - cmdline: "regex:.*(grep|find).*(password|credential|secret|key|token).*"
       severity: high
       logic_operator: AND
@@ -1107,7 +961,7 @@ detection_rules:
         收集系统信息，通常是侦察阶段的行为。
         MITRE ATT&CK: T1082 - System Information Discovery
       conditions:
-        - event_type: "regex:^(execve|execveat|process_create)$"
+        - event_type: process_create
         - comm: "regex:^(uname|hostnamectl|cat|lscpu|free|df|mount|lsblk|fdisk|dmidecode)$"
         - cmdline: "regex:.*/(proc|etc)/(cpuinfo|meminfo|hostname|os-release|passwd|group|shadow).*"
       severity: low
@@ -1136,6 +990,7 @@ whitelist:
     - cron
     - atd
     - sshd
+    - sudo
     - polkitd
     - auditd
 

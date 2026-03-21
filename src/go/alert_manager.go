@@ -462,6 +462,11 @@ func (am *AlertManager) aggregateAlert(existingAlert, newAlert *ManagedAlert) (*
 	// 聚合告警也更新统计（增加总告警数，但不增加活跃告警数）
 	am.stats.TotalAlerts++
 
+	// 更新严重级别分布统计
+	if newAlert.Severity != "" {
+		am.stats.SeverityDistribution[newAlert.Severity]++
+	}
+
 	// 更新类别统计
 	if newAlert.Category != "" {
 		am.stats.CategoryDistribution[newAlert.Category]++
