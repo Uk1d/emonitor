@@ -737,8 +737,18 @@
                 return str.toLowerCase().includes(search);
             }) : state.events;
             els.eventsTbody.innerHTML = filtered.slice(0, 100).map(e => {
-                const src = e.src_addr ? (e.src_addr.ip + ':' + e.src_addr.port) : '';
-                const dst = e.dst_addr ? (e.dst_addr.ip + ':' + e.dst_addr.port) : '';
+                // 安全地格式化网络地址，避免显示空IP或端口
+                const formatAddr = (addr) => {
+                    if (!addr) return '';
+                    const ip = addr.ip || '';
+                    const port = addr.port || '';
+                    if (!ip && !port) return addr.family || '';
+                    if (!ip) return addr.family + ':' + port;
+                    if (!port) return ip;
+                    return ip + ':' + port;
+                };
+                const src = formatAddr(e.src_addr);
+                const dst = formatAddr(e.dst_addr);
                 const target = e.filename || src || dst || '';
                 return '<tr>' +
                     '<td>' + formatTime(e.timestamp) + '</td>' +

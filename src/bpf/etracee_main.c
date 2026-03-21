@@ -77,6 +77,63 @@ struct {
 } pid_filter SEC(".maps");
 
 /*
+ * Socket地址映射 - 用于存储已连接socket的地址信息
+ * 
+ * 设计原理：
+ * - 哈希表结构，键为(PID, sockfd)组合，值为网络地址
+ * - 在connect事件中记录地址
+ * - 在recvfrom/sendto事件中查找地址
+ * 
+ * 使用场景：
+ * - TCP连接：connect后记录目标地址，后续send/recv复用
+ * - UDP：每次sendto/recvfrom可能有不同地址
+ * - 跟踪已建立连接的网络活动
+ */
+struct socket_key {
+    __u32 pid;
+    __u32 sockfd;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, struct socket_key);     // (PID, sockfd)作为键
+    __type(value, struct network_addr); // 网络地址作为值
+} socket_addr_map SEC(".maps");
+
+/*
+ * 系统调用参数暂存映射 - 用于在enter和exit事件之间传递参数
+ * 
+ * 设计原理：
+ * - 哈希表结构，键为(PID, syscall_type)，值为保存的参数
+ * - 在enter事件中保存参数
+ * - 在exit事件中读取参数并获取地址信息
+ * 
+ * 使用场景：
+ * - recvfrom: 保存sockfd和addr指针，exit时读取内核填充的地址
+ * - sendto: 保存sockfd和addr指针，exit时读取地址
+ * - accept: 保存sockfd，exit时获取新socket的地址
+ */
+struct syscall_args {
+    __u32 sockfd;
+    __u64 addr_ptr;
+    __u32 addrlen;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, __u64);              // (tid << 32) | syscall_type
+    __type(value, struct syscall_args);
+} syscall_args_map SEC(".maps");
+
+// 系统调用类型定义
+#define SYSCALL_RECVFROM 1
+#define SYSCALL_SENDTO   2
+#define SYSCALL_ACCEPT   3
+#define SYSCALL_ACCEPT4  4
+
+/*
  * 配置映射 - 用于动态配置系统行为
  * 
  * 设计原理：
@@ -185,6 +242,10 @@ static inline bool is_uid_in_range(u32 uid) {
 static inline void init_event_base(struct event *e, u32 event_type) {
     u64 id = bpf_get_current_pid_tgid();
     u32 pid = id >> 32;  // 高32位是PID
+    
+    // 清零地址结构，避免垃圾数据
+    __builtin_memset(&e->src_addr, 0, sizeof(e->src_addr));
+    __builtin_memset(&e->dst_addr, 0, sizeof(e->dst_addr));
     
     e->timestamp = bpf_ktime_get_ns();                              // 纳秒级时间戳
     e->event_type = event_type;                                     // 事件类型

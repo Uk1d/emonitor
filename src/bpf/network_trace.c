@@ -28,6 +28,34 @@
  * - 监控数据外泄通道
  */
 
+// 辅助函数：更新socket地址映射
+// 用于在connect/sendto事件后保存地址，供recvfrom事件使用
+static inline void update_socket_addr_map(u32 pid, u32 sockfd, struct network_addr *addr) {
+    struct socket_key sk;
+    sk.pid = pid;
+    sk.sockfd = sockfd;
+    bpf_map_update_elem(&socket_addr_map, &sk, addr, BPF_ANY);
+    // 同时保存全局key（用于继承socket的场景）
+    struct socket_key global_sk;
+    global_sk.pid = 0;
+    global_sk.sockfd = sockfd;
+    bpf_map_update_elem(&socket_addr_map, &global_sk, addr, BPF_ANY);
+}
+
+// 辅助函数：从socket地址映射获取地址
+static inline struct network_addr* get_socket_addr(u32 pid, u32 sockfd) {
+    struct socket_key sk;
+    sk.pid = pid;
+    sk.sockfd = sockfd;
+    struct network_addr *addr = bpf_map_lookup_elem(&socket_addr_map, &sk);
+    if (addr) return addr;
+    // 尝试全局key
+    struct socket_key global_sk;
+    global_sk.pid = 0;
+    global_sk.sockfd = sockfd;
+    return bpf_map_lookup_elem(&socket_addr_map, &global_sk);
+}
+
 // ========== 网络相关事件跟踪 ==========
 
 /*
@@ -76,6 +104,7 @@
 SEC("tracepoint/syscalls/sys_enter_connect")
 int trace_connect(struct trace_event_raw_sys_enter *ctx) {
     TRACE_EVENT_COMMON(CONFIG_ENABLE_NET_EVENTS, EVENT_CONNECT, ctx, {
+        int sockfd = (int)ctx->args[0];
         struct sockaddr *addr = (struct sockaddr *)ctx->args[1];
         if (addr) {
             u16 family;
@@ -90,6 +119,8 @@ int trace_connect(struct trace_event_raw_sys_enter *ctx) {
                 bpf_probe_read_user(&e->dst_addr.port, sizeof(e->dst_addr.port), &addr_in6->sin6_port);
                 bpf_probe_read_user(&e->dst_addr.addr.ipv6, sizeof(e->dst_addr.addr.ipv6), &addr_in6->sin6_addr);
             }
+            // 更新socket地址映射
+            update_socket_addr_map(e->pid, (u32)sockfd, &e->dst_addr);
         }
     });
 }
@@ -212,91 +243,166 @@ int trace_listen(struct trace_event_raw_sys_enter *ctx) {
 
 SEC("tracepoint/syscalls/sys_enter_accept4")
 int trace_accept4(struct trace_event_raw_sys_enter *ctx) {
-    TRACE_EVENT_COMMON(CONFIG_ENABLE_NET_EVENTS, EVENT_ACCEPT, ctx, {
-        struct sockaddr *addr = (struct sockaddr *)ctx->args[1];
-        if (addr) {
-            u16 family;
-            bpf_probe_read_user(&family, sizeof(family), &addr->sa_family);
-            e->src_addr.family = family;
-            if (family == AF_INET) {
-                struct sockaddr_in *addr_in = (struct sockaddr_in *)addr;
-                bpf_probe_read_user(&e->src_addr.port, sizeof(e->src_addr.port), &addr_in->sin_port);
-                bpf_probe_read_user(&e->src_addr.addr.ipv4, sizeof(e->src_addr.addr.ipv4), &addr_in->sin_addr);
-            } else if (family == AF_INET6) {
-                struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)addr;
-                bpf_probe_read_user(&e->src_addr.port, sizeof(e->src_addr.port), &addr_in6->sin6_port);
-                bpf_probe_read_user(&e->src_addr.addr.ipv6, sizeof(e->src_addr.addr.ipv6), &addr_in6->sin6_addr);
-            }
-        }
-        e->flags = (u32)ctx->args[3];
-    });
+    // 保存参数，不发送事件（在exit事件中发送）
+    u64 id = bpf_get_current_pid_tgid();
+    u32 tid = (u32)id;
+    
+    struct sockaddr *addr = (struct sockaddr *)ctx->args[1];
+    u32 addrlen_ptr = (u32)ctx->args[2];
+    
+    // 保存参数到map
+    struct syscall_args args = {
+        .sockfd = (u32)ctx->args[0],  // listen socket fd
+        .addr_ptr = (u64)(long)addr,
+        .addrlen = addrlen_ptr,
+    };
+    u64 key = ((u64)tid << 32) | SYSCALL_ACCEPT4;
+    bpf_map_update_elem(&syscall_args_map, &key, &args, BPF_ANY);
+    
+    return 0;
 }
 
 SEC("tracepoint/syscalls/sys_enter_accept")
 int trace_accept(struct trace_event_raw_sys_enter *ctx) {
-    TRACE_EVENT_COMMON(CONFIG_ENABLE_NET_EVENTS, EVENT_ACCEPT, ctx, {
-        struct sockaddr *addr = (struct sockaddr *)ctx->args[1];
-        if (addr) {
-            u16 family;
+    // 保存参数，不发送事件（在exit事件中发送）
+    u64 id = bpf_get_current_pid_tgid();
+    u32 tid = (u32)id;
+    
+    struct sockaddr *addr = (struct sockaddr *)ctx->args[1];
+    u32 addrlen_ptr = (u32)ctx->args[2];
+    
+    // 保存参数到map
+    struct syscall_args args = {
+        .sockfd = (u32)ctx->args[0],  // listen socket fd
+        .addr_ptr = (u64)(long)addr,
+        .addrlen = addrlen_ptr,
+    };
+    u64 key = ((u64)tid << 32) | SYSCALL_ACCEPT;
+    bpf_map_update_elem(&syscall_args_map, &key, &args, BPF_ANY);
+    
+    return 0;
+}
+
+// accept退出事件 - 获取客户端地址信息
+SEC("tracepoint/syscalls/sys_exit_accept")
+int trace_accept_exit(struct trace_event_raw_sys_exit *ctx) {
+    // accept成功时返回新的socket fd
+    if (ctx->ret < 0) return 0;
+    
+    // 检查配置是否启用
+    if (!is_config_enabled(CONFIG_ENABLE_NET_EVENTS)) return 0;
+    
+    // 获取保存的参数（先尝试ACCEPT4，再尝试ACCEPT）
+    u64 id = bpf_get_current_pid_tgid();
+    u32 pid = id >> 32;
+    u32 tid = (u32)id;
+    u64 key = ((u64)tid << 32) | SYSCALL_ACCEPT4;
+    struct syscall_args *args = bpf_map_lookup_elem(&syscall_args_map, &key);
+    if (!args) {
+        key = ((u64)tid << 32) | SYSCALL_ACCEPT;
+        args = bpf_map_lookup_elem(&syscall_args_map, &key);
+    }
+    if (!args) return 0;
+    
+    // 删除map中的参数
+    bpf_map_delete_elem(&syscall_args_map, &key);
+    
+    // 创建事件
+    struct event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) return 0;
+    
+    // 初始化事件基础信息
+    init_event_base(e, EVENT_ACCEPT);
+    e->ret_code = ctx->ret;  // 新的socket fd
+    e->flags = 0;
+    
+    // 如果addr指针不为NULL，读取内核填充的客户端地址
+    if (args->addr_ptr) {
+        // 先读取addrlen
+        u32 addrlen = 0;
+        bpf_probe_read_user(&addrlen, sizeof(addrlen), (void *)(long)args->addrlen);
+        
+        if (addrlen >= sizeof(struct sockaddr)) {
+            struct sockaddr *addr = (struct sockaddr *)(long)args->addr_ptr;
+            u16 family = 0;
             bpf_probe_read_user(&family, sizeof(family), &addr->sa_family);
             e->src_addr.family = family;
-            if (family == AF_INET) {
+            if (family == AF_INET && addrlen >= sizeof(struct sockaddr_in)) {
                 struct sockaddr_in *addr_in = (struct sockaddr_in *)addr;
                 bpf_probe_read_user(&e->src_addr.port, sizeof(e->src_addr.port), &addr_in->sin_port);
                 bpf_probe_read_user(&e->src_addr.addr.ipv4, sizeof(e->src_addr.addr.ipv4), &addr_in->sin_addr);
-            } else if (family == AF_INET6) {
+            } else if (family == AF_INET6 && addrlen >= sizeof(struct sockaddr_in6)) {
                 struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)addr;
                 bpf_probe_read_user(&e->src_addr.port, sizeof(e->src_addr.port), &addr_in6->sin6_port);
                 bpf_probe_read_user(&e->src_addr.addr.ipv6, sizeof(e->src_addr.addr.ipv6), &addr_in6->sin6_addr);
             }
         }
-    });
+    }
+    
+    // 应用过滤规则
+    if (should_filter_pid(e->pid) || !is_uid_in_range(e->uid)) {
+        bpf_ringbuf_discard(e, 0);
+        return 0;
+    }
+    
+    bpf_ringbuf_submit(e, 0);
+    return 0;
 }
 
 SEC("tracepoint/syscalls/sys_enter_sendto")
 int trace_sendto(struct trace_event_raw_sys_enter *ctx) {
     TRACE_EVENT_COMMON(CONFIG_ENABLE_NET_EVENTS, EVENT_SENDTO, ctx, {
+        int sockfd = (int)ctx->args[0];
         struct sockaddr *addr = (struct sockaddr *)ctx->args[4];
-        if (addr) {
+        u32 addrlen = (u32)ctx->args[5];
+        
+        if (addr && addrlen >= sizeof(struct sockaddr)) {
             u16 family;
             bpf_probe_read_user(&family, sizeof(family), &addr->sa_family);
             e->dst_addr.family = family;
-            if (family == AF_INET) {
+            if (family == AF_INET && addrlen >= sizeof(struct sockaddr_in)) {
                 struct sockaddr_in *addr_in = (struct sockaddr_in *)addr;
                 bpf_probe_read_user(&e->dst_addr.port, sizeof(e->dst_addr.port), &addr_in->sin_port);
                 bpf_probe_read_user(&e->dst_addr.addr.ipv4, sizeof(e->dst_addr.addr.ipv4), &addr_in->sin_addr);
-            } else if (family == AF_INET6) {
+            } else if (family == AF_INET6 && addrlen >= sizeof(struct sockaddr_in6)) {
                 struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)addr;
                 bpf_probe_read_user(&e->dst_addr.port, sizeof(e->dst_addr.port), &addr_in6->sin6_port);
                 bpf_probe_read_user(&e->dst_addr.addr.ipv6, sizeof(e->dst_addr.addr.ipv6), &addr_in6->sin6_addr);
             }
+            // 更新socket地址映射
+            update_socket_addr_map(e->pid, (u32)sockfd, &e->dst_addr);
         }
         e->size = (u64)ctx->args[2];
         e->flags = (u32)ctx->args[3];
     });
 }
 
+// sendto退出事件 - 暂不使用
+SEC("tracepoint/syscalls/sys_exit_sendto")
+int trace_sendto_exit(struct trace_event_raw_sys_exit *ctx) {
+    return 0;
+}
+
 SEC("tracepoint/syscalls/sys_enter_recvfrom")
 int trace_recvfrom(struct trace_event_raw_sys_enter *ctx) {
+    int sockfd = (int)ctx->args[0];
+    
     TRACE_EVENT_COMMON(CONFIG_ENABLE_NET_EVENTS, EVENT_RECVFROM, ctx, {
-        struct sockaddr *addr = (struct sockaddr *)ctx->args[4];
-        if (addr) {
-            u16 family;
-            bpf_probe_read_user(&family, sizeof(family), &addr->sa_family);
-            e->src_addr.family = family;
-            if (family == AF_INET) {
-                struct sockaddr_in *addr_in = (struct sockaddr_in *)addr;
-                bpf_probe_read_user(&e->src_addr.port, sizeof(e->src_addr.port), &addr_in->sin_port);
-                bpf_probe_read_user(&e->src_addr.addr.ipv4, sizeof(e->src_addr.addr.ipv4), &addr_in->sin_addr);
-            } else if (family == AF_INET6) {
-                struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)addr;
-                bpf_probe_read_user(&e->src_addr.port, sizeof(e->src_addr.port), &addr_in6->sin6_port);
-                bpf_probe_read_user(&e->src_addr.addr.ipv6, sizeof(e->src_addr.addr.ipv6), &addr_in6->sin6_addr);
-            }
+        // 从socket地址映射获取已连接的地址
+        struct network_addr *saved_addr = get_socket_addr(e->pid, (u32)sockfd);
+        if (saved_addr) {
+            __builtin_memcpy(&e->src_addr, saved_addr, sizeof(e->src_addr));
         }
+        
         e->size = (u64)ctx->args[2];
         e->flags = (u32)ctx->args[3];
     });
+}
+
+// recvfrom退出事件 - 暂不使用
+SEC("tracepoint/syscalls/sys_exit_recvfrom")
+int trace_recvfrom_exit(struct trace_event_raw_sys_exit *ctx) {
+    return 0;
 }
 
 SEC("tracepoint/syscalls/sys_enter_socket")

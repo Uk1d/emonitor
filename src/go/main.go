@@ -40,6 +40,7 @@ type NetworkAddr struct {
 }
 
 // 原始事件结构 - 与eBPF程序保持一致
+// 注意：结构体字段顺序必须与C代码中的struct event完全一致
 type RawEvent struct {
 	Timestamp  uint64      `json:"timestamp"`
 	PID        uint32      `json:"pid"`
@@ -51,6 +52,7 @@ type RawEvent struct {
 	RetCode    int32       `json:"ret_code"`
 	Comm       [16]byte    `json:"-"`
 	Filename   [256]byte   `json:"-"`
+	Cmdline    [1024]byte  `json:"-"` // 对应C中的char cmdline[1024]
 	Mode       uint32      `json:"mode"`
 	Size       uint64      `json:"size"`
 	Flags      uint32      `json:"flags"`
@@ -232,8 +234,10 @@ func cleanStringForDisplay(b []byte) string {
 }
 
 func parseRawEvent(b []byte) (*RawEvent, error) {
-	if len(b) < 428 {
-		return nil, fmt.Errorf("invalid event size: %d", len(b))
+	// 结构体大小考虑C对齐: 8+4+4+4+4+4+4+4+16+256+1024+4+8+4+20+20+4+4+4+4+4(pad)+8+8+4+16+4+4 = 1456
+	// C中__u64 addr需要8字节对齐，new_gid后有4字节padding
+	if len(b) < 1456 {
+		return nil, fmt.Errorf("invalid event size: %d (expected >= 1456)", len(b))
 	}
 	e := &RawEvent{}
 	e.Timestamp = binary.LittleEndian.Uint64(b[0:8])
@@ -244,27 +248,29 @@ func parseRawEvent(b []byte) (*RawEvent, error) {
 	e.SyscallID = binary.LittleEndian.Uint32(b[24:28])
 	e.EventType = binary.LittleEndian.Uint32(b[28:32])
 	e.RetCode = int32(binary.LittleEndian.Uint32(b[32:36]))
-	copy(e.Comm[:], b[36:52])
-	copy(e.Filename[:], b[52:308])
-	e.Mode = binary.LittleEndian.Uint32(b[308:312])
-	e.Size = binary.LittleEndian.Uint64(b[312:320])
-	e.Flags = binary.LittleEndian.Uint32(b[320:324])
-	e.SrcAddr.Family = binary.LittleEndian.Uint16(b[324:326])
-	e.SrcAddr.Port = binary.LittleEndian.Uint16(b[326:328])
-	copy(e.SrcAddr.Addr[:], b[328:344])
-	e.DstAddr.Family = binary.LittleEndian.Uint16(b[344:346])
-	e.DstAddr.Port = binary.LittleEndian.Uint16(b[346:348])
-	copy(e.DstAddr.Addr[:], b[348:364])
-	e.OldUID = binary.LittleEndian.Uint32(b[364:368])
-	e.OldGID = binary.LittleEndian.Uint32(b[368:372])
-	e.NewUID = binary.LittleEndian.Uint32(b[372:376])
-	e.NewGID = binary.LittleEndian.Uint32(b[376:380])
-	e.Addr = binary.LittleEndian.Uint64(b[384:392])
-	e.Len = binary.LittleEndian.Uint64(b[392:400])
-	e.Prot = binary.LittleEndian.Uint32(b[400:404])
-	copy(e.TargetComm[:], b[404:420])
-	e.TargetPID = binary.LittleEndian.Uint32(b[420:424])
-	e.Signal = binary.LittleEndian.Uint32(b[424:428])
+	copy(e.Comm[:], b[36:52])       // 16 bytes
+	copy(e.Filename[:], b[52:308])  // 256 bytes
+	copy(e.Cmdline[:], b[308:1332]) // 1024 bytes
+	e.Mode = binary.LittleEndian.Uint32(b[1332:1336])
+	e.Size = binary.LittleEndian.Uint64(b[1336:1344]) // 1336是8字节对齐，无需padding
+	e.Flags = binary.LittleEndian.Uint32(b[1344:1348])
+	e.SrcAddr.Family = binary.LittleEndian.Uint16(b[1348:1350])
+	e.SrcAddr.Port = binary.LittleEndian.Uint16(b[1350:1352])
+	copy(e.SrcAddr.Addr[:], b[1352:1368])
+	e.DstAddr.Family = binary.LittleEndian.Uint16(b[1368:1370])
+	e.DstAddr.Port = binary.LittleEndian.Uint16(b[1370:1372])
+	copy(e.DstAddr.Addr[:], b[1372:1388])
+	e.OldUID = binary.LittleEndian.Uint32(b[1388:1392])
+	e.OldGID = binary.LittleEndian.Uint32(b[1392:1396])
+	e.NewUID = binary.LittleEndian.Uint32(b[1396:1400])
+	e.NewGID = binary.LittleEndian.Uint32(b[1400:1404])
+	// b[1404:1408] - 4字节padding，为了__u64 addr的8字节对齐
+	e.Addr = binary.LittleEndian.Uint64(b[1408:1416])
+	e.Len = binary.LittleEndian.Uint64(b[1416:1424])
+	e.Prot = binary.LittleEndian.Uint32(b[1424:1428])
+	copy(e.TargetComm[:], b[1428:1444]) // 16 bytes
+	e.TargetPID = binary.LittleEndian.Uint32(b[1444:1448])
+	e.Signal = binary.LittleEndian.Uint32(b[1448:1452])
 	return e, nil
 }
 
@@ -438,6 +444,11 @@ func convertToJSON(raw *RawEvent) *EventJSON {
 		event.Filename = filename
 	}
 
+	// 命令行参数（从eBPF事件中获取）
+	if cmdline := bytesToString(raw.Cmdline[:]); cmdline != "" {
+		event.Cmdline = cmdline
+	}
+
 	// 模式和标志
 	if raw.Mode != 0 {
 		event.Mode = raw.Mode
@@ -449,17 +460,18 @@ func convertToJSON(raw *RawEvent) *EventJSON {
 		event.Flags = raw.Flags
 	}
 
-	// 网络地址：仅在网络类事件中输出，避免非网络事件出现误填字段
+	// 网络地址：仅在网络类事件中输出
 	isNetEvent := false
 	switch event.EventType {
 	case "connect", "bind", "listen", "accept", "sendto", "recvfrom", "socket", "shutdown":
 		isNetEvent = true
 	}
 	if isNetEvent {
-		if srcAddr := addrToString(raw.SrcAddr); srcAddr != nil {
+		// 输出有效的网络地址（AF_INET或AF_INET6）
+		if srcAddr := addrToString(raw.SrcAddr); srcAddr != nil && srcAddr.IP != "" {
 			event.SrcAddr = srcAddr
 		}
-		if dstAddr := addrToString(raw.DstAddr); dstAddr != nil {
+		if dstAddr := addrToString(raw.DstAddr); dstAddr != nil && dstAddr.IP != "" {
 			event.DstAddr = dstAddr
 		}
 	}
