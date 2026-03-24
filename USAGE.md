@@ -1,10 +1,11 @@
 # eTracee 使用说明
 
-本文档面向“使用者/运维/研发”，覆盖：
+本文档面向"使用者/运维/研发"，覆盖：
 
 - 主程序与工具的所有命令行参数及用途
 - 运行期环境变量开关
-- 编译期参数（Go 与 eBPF）
+- Web 界面使用说明
+- AI 对话功能配置
 
 ## 1. 主程序（etracee）
 
@@ -18,168 +19,235 @@ sudo ./bin/etracee [参数]
 
 ### 1.2 参数列表
 
-- `-config <路径>`：安全规则配置文件路径  
-  - 默认：`config/enhanced_security_config.yaml`
-  - 用途：加载规则、全局开关（事件类别开关/UID 范围等）、白名单与响应动作。
-- `-dashboard`：启用命令行 Dashboard  
-  - 默认：`false`
-  - 用途：在终端输出聚合统计与 Top 进程等信息。
-- `-pid-min <整数>`：过滤 PID 最小值  
-  - 默认：`0`（不启用过滤）
-  - 用途：丢弃 PID 小于该值的事件。
-- `-pid-max <整数>`：过滤 PID 最大值  
-  - 默认：`0`（不启用过滤）
-  - 用途：丢弃 PID 大于该值的事件。
-- `-uid-min <整数>`：过滤 UID 最小值  
-  - 默认：`0`（不启用过滤）
-  - 用途：丢弃 UID 小于该值的事件。
-- `-uid-max <整数>`：过滤 UID 最大值  
-  - 默认：`0`（不启用过滤）
-  - 用途：丢弃 UID 大于该值的事件。
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `-config <路径>` | `config/enhanced_security_config.yaml` | 安全规则配置文件路径 |
+| `-dashboard` | `false` | 启用命令行 Dashboard |
+| `-monitor-only` | `false` | 仅运行监控模式（用于分离架构） |
+| `-web-port <端口>` | `8888` | Web 服务端口 |
+| `-ws-port <端口>` | `8889` | WebSocket 服务端口 |
+| `-pid-min <整数>` | `0` | 过滤 PID 最小值 |
+| `-pid-max <整数>` | `0` | 过滤 PID 最大值 |
+| `-uid-min <整数>` | `0` | 过滤 UID 最小值 |
+| `-uid-max <整数>` | `0` | 过滤 UID 最大值 |
 
 ### 1.3 子命令
 
-主程序在 `etracee` 后支持两个子命令：
-
-- `etracee test`：规则测试工具（参数见第 2 节）
-- `etracee integration-test`：集成测试（无参数）
+- `etracee test`：规则测试工具
+- `etracee integration-test`：集成测试
 
 ## 2. 规则测试工具（etracee test）
-
-### 2.1 用法
 
 ```bash
 ./bin/etracee test [参数]
 ```
 
-### 2.2 参数列表
-
-- `-config <路径>`：规则配置文件路径  
-  - 默认：`./config/enhanced_security_config.yaml`
-- `-test-data <路径>`：测试数据目录路径  
-  - 默认：`./test_data`
-- `-report <路径>`：测试报告输出目录  
-  - 默认：`./test_reports`
-- `-verbose`：详细输出模式  
-  - 默认：`false`
-- `-benchmark`：启用性能测试  
-  - 默认：`true`
-
-说明：该命令用于规则验证与报告生成，行为由 [test_runner.go](file:///e:/bs/eTracee/src/go/test_runner.go) 定义。
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `-config <路径>` | `./config/enhanced_security_config.yaml` | 规则配置文件路径 |
+| `-test-data <路径>` | `./test_data` | 测试数据目录路径 |
+| `-report <路径>` | `./test_reports` | 测试报告输出目录 |
+| `-verbose` | `false` | 详细输出模式 |
+| `-benchmark` | `true` | 启用性能测试 |
 
 ## 3. 规则导入工具（rule_importer）
 
-该工具用于把其他项目的规则（Falco YAML / Tracee JSON）转换为 eTracee 的 `enhanced_security_config.yaml` 结构。
-
-### 3.1 用法
-
-直接运行：
+用于把其他项目的规则（Falco YAML / Tracee JSON）转换为 eTracee 的格式。
 
 ```bash
-go run ./src/go/tools/rule_importer/main.go -input <输入文件> -output <输出文件> [其他参数]
-```
+# 直接运行
+go run ./src/go/tools/rule_importer/main.go -input <输入文件> -output <输出文件>
 
-或自行编译后运行：
-
-```bash
+# 或编译后运行
 go build -o ./bin/rule_importer ./src/go/tools/rule_importer
-./bin/rule_importer -input <输入文件> -output <输出文件> [其他参数]
+./bin/rule_importer -input <输入文件> -output <输出文件>
 ```
 
-### 3.2 参数列表
-
-- `-input <路径>`：输入规则文件路径（必填）
-- `-format <falco|tracee>`：规则格式（可选）  
-  - 为空时：若输入看起来像 JSON（或扩展名为 `.json`）则按 `tracee` 处理，否则按 `falco` 处理
-- `-output <路径>`：输出规则文件路径（必填）
-- `-default-category <字符串>`：默认类别（可选；默认：`general`）
-- `-default-severity <字符串>`：默认严重级别（可选；默认：`medium`）
-- `-enable <true|false>`：是否启用导入的规则（默认：`true`）  
-  - 用途：统一控制导入后规则的 `enabled` 字段
-- `-allow-partial <true|false>`：允许存在未映射字段的规则启用（默认：`false`）  
-  - 用途：当 Falco 条件字段无法完整映射时，仍允许“部分条件可用”的规则处于启用态
-- `-field-map <JSON>`：字段映射 JSON 字符串（可选）  
-  - 用途：覆盖/追加默认字段映射
-- `-field-map-file <路径>`：字段映射 JSON 文件路径（可选）  
-  - 用途：从文件加载映射，覆盖/追加默认字段映射
-
-说明：导出文件会写入 `global` 默认值，以避免“程序运行但无事件”的情况（见 [rule_importer/main.go](file:///e:/bs/eTracee/src/go/tools/rule_importer/main.go)）。
+| 参数 | 说明 |
+|------|------|
+| `-input <路径>` | 输入规则文件路径（必填） |
+| `-format <falco\|tracee>` | 规则格式 |
+| `-output <路径>` | 输出规则文件路径（必填） |
+| `-default-category <字符串>` | 默认类别（默认：general） |
+| `-default-severity <字符串>` | 默认严重级别（默认：medium） |
+| `-enable <true\|false>` | 是否启用导入的规则 |
 
 ## 4. 运行期环境变量
 
-### 4.1 Web/API 服务与安全
+### 4.1 数据库配置
 
-- `ETRACEE_BIND_ADDR`：绑定地址  
-  - 为空时默认 `0.0.0.0`，端口固定为 `8888`
-  - 若值包含 `:`（例如 `127.0.0.1:8888`），则按“完整地址”使用
-- `ETRACEE_API_TOKEN`：API/WS 鉴权令牌  
-  - 为空：不启用鉴权
-  - 非空：启用鉴权（HTTP 与 WebSocket 一致）
-- `ETRACEE_ALLOWED_ORIGINS`：CORS 白名单（逗号分隔）
-- `ETRACEE_WS_QUEUE_SIZE`：WebSocket 客户端队列长度（默认 1024，上限 8192）
+| 环境变量 | 说明 |
+|----------|------|
+| `MYSQL_EVENTS_HOST` | 监控数据库主机 |
+| `MYSQL_EVENTS_PORT` | 监控数据库端口 |
+| `MYSQL_EVENTS_USER` | 监控数据库用户 |
+| `MYSQL_EVENTS_PASSWORD` | 监控数据库密码 |
+| `MYSQL_WEB_HOST` | Web 数据库主机 |
+| `MYSQL_WEB_PORT` | Web 数据库端口 |
+| `MYSQL_WEB_USER` | Web 数据库用户 |
+| `MYSQL_WEB_PASSWORD` | Web 数据库密码 |
 
-### 4.2 事件与规则引擎开关
+### 4.2 管理员配置
 
-当加载 `-config` 失败时，主程序会从环境变量回退构造 `global` 配置：
+| 环境变量 | 说明 |
+|----------|------|
+| `ADMIN_USERNAME` | 管理员用户名 |
+| `ADMIN_PASSWORD` | 管理员密码 |
+| `JWT_SECRET` | JWT 密钥 |
 
-- `ETRACEE_ENABLE_FILE`：文件事件开关（默认 true）
-- `ETRACEE_ENABLE_NETWORK`：网络事件开关（默认 true）
-- `ETRACEE_ENABLE_PROCESS`：进程事件开关（默认 true）
-- `ETRACEE_ENABLE_PERMISSION`：权限事件开关（默认 true）
-- `ETRACEE_ENABLE_MEMORY`：内存事件开关（默认 true）
-- `ETRACEE_UID_MIN`：最小 UID（默认 0）
-- `ETRACEE_UID_MAX`：最大 UID（默认 65535）
-- `ETRACEE_MAX_EPS`：最大每秒事件数（默认 10000）
-- `ETRACEE_ALERT_THROTTLE`：告警节流秒数（默认 60）
-- `ETRACEE_MAX_ALERT_HISTORY`：告警历史上限（默认 1000）
-- `ETRACEE_ENABLE_RULE_STATS`：规则统计开关（默认 true）
-- `ETRACEE_LOG_LEVEL`：日志级别（默认 info）
+### 4.3 Web/API 服务
 
-### 4.3 Webhook 通知
+| 环境变量 | 说明 |
+|----------|------|
+| `ETRACEE_BIND_ADDR` | 绑定地址（默认 0.0.0.0） |
+| `ETRACEE_API_TOKEN` | API/WS 鉴权令牌 |
+| `ETRACEE_ALLOWED_ORIGINS` | CORS 白名单 |
+| `ETRACEE_WS_QUEUE_SIZE` | WebSocket 客户端队列长度 |
 
-- `ETRACEE_WEBHOOK_URL`：Webhook 地址（为空则不启用）
-- `ETRACEE_WEBHOOK_TIMEOUT`：超时（Go `time.ParseDuration` 格式，例如 `10s`）
-- `ETRACEE_WEBHOOK_RETRY`：重试次数（整数，默认 0）
-- `ETRACEE_WEBHOOK_SECRET`：签名密钥（启用后会发送 HMAC-SHA256 签名头）
+### 4.4 事件与规则引擎
 
-## 5. 编译期参数（构建期）
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `ETRACEE_ENABLE_FILE` | true | 文件事件开关 |
+| `ETRACEE_ENABLE_NETWORK` | true | 网络事件开关 |
+| `ETRACEE_ENABLE_PROCESS` | true | 进程事件开关 |
+| `ETRACEE_ENABLE_PERMISSION` | true | 权限事件开关 |
+| `ETRACEE_ENABLE_MEMORY` | true | 内存事件开关 |
+| `ETRACEE_UID_MIN` | 0 | 最小 UID |
+| `ETRACEE_UID_MAX` | 65535 | 最大 UID |
+| `ETRACEE_MAX_EPS` | 10000 | 最大每秒事件数 |
+| `ETRACEE_LOG_LEVEL` | info | 日志级别 |
 
-### 5.1 Go 用户态程序构建
+### 4.5 Webhook 通知
 
-仓库使用 Go module（`src/go/go.mod`）。常见构建方式：
+| 环境变量 | 说明 |
+|----------|------|
+| `ETRACEE_WEBHOOK_URL` | Webhook 地址 |
+| `ETRACEE_WEBHOOK_TIMEOUT` | 超时（如 `10s`） |
+| `ETRACEE_WEBHOOK_RETRY` | 重试次数 |
+| `ETRACEE_WEBHOOK_SECRET` | 签名密钥 |
+
+## 5. Web 界面使用说明
+
+### 5.1 访问方式
+
+启动后访问 `http://localhost:8888`，使用管理员账户登录。
+
+### 5.2 功能模块
+
+#### 告警列表
+
+- 实时显示安全告警
+- 支持按严重级别（严重/高危/中危/低危）过滤
+- 点击告警可查看详情
+- 支持告警状态管理（确认/处理/解决/标记误报）
+
+#### 事件流
+
+- 实时显示系统事件
+- 支持搜索过滤
+- 显示时间、事件类型、进程ID、进程名、目标等信息
+
+#### 攻击链图谱
+
+- 可视化展示攻击路径
+- 支持节点拖拽
+- 显示攻击阶段和关联关系
+
+#### AI 检测（Beta）
+
+- 显示 AI 异常检测结果
+- 支持按类型和级别过滤
+
+#### 报告导出
+
+- 支持 JSON/CSV/HTML 三种格式
+- 可选择包含的数据类型
+
+### 5.3 连接状态说明
+
+| 状态 | 含义 |
+|------|------|
+| 已连接(等待监控) | Web 服务已连接，监控程序未运行 |
+| 监控运行中 | 监控程序正在运行并推送数据 |
+| 监控未运行 | 超过 10 秒未收到数据 |
+| 连接断开 | WebSocket 连接已断开 |
+
+### 5.4 告警状态
+
+| 状态 | 说明 |
+|------|------|
+| 新建 | 新产生的告警 |
+| 已确认 | 运维人员已确认 |
+| 处理中 | 正在处理 |
+| 已解决 | 告警已处理完成 |
+| 误报 | 标记为误报 |
+
+## 6. AI 对话功能
+
+### 6.1 功能说明
+
+AI 对话功能支持与多种 AI 服务商对接，提供实时安全分析和排查建议。
+
+### 6.2 支持的 AI 服务商
+
+| 服务商 | API 地址 | 说明 |
+|--------|----------|------|
+| OpenAI | `https://api.openai.com/v1` | GPT-3.5/4/4o |
+| Anthropic | `https://api.anthropic.com/v1` | Claude 3/3.5 |
+| Moonshot | `https://api.moonshot.cn/v1` | Kimi |
+| Google | `https://generativelanguage.googleapis.com/v1beta` | Gemini |
+| DeepSeek | `https://api.deepseek.com/v1` | DeepSeek Chat |
+| 智谱 AI | `https://open.bigmodel.cn/api/paas/v4` | GLM-4 |
+| 阿里云 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 通义千问 |
+| 百度 | `https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop` | 文心一言 |
+| 硅基流动 | `https://api.siliconflow.cn/v1` | 多种开源模型 |
+| Ollama | `http://localhost:11434/v1` | 本地部署模型 |
+
+### 6.3 配置步骤
+
+1. 点击页面右下角 AI 助手按钮
+2. 点击配置按钮（⚙️）
+3. 选择服务商
+4. 输入 API Key
+5. 选择模型
+6. 点击"保存配置"
+
+### 6.4 使用方式
+
+- **快速问题**：点击预设的快捷问题按钮
+- **自定义问题**：在输入框中输入问题
+- **上下文分析**：AI 会自动读取当前告警和事件数据
+
+### 6.5 常用命令示例
+
+- "分析最近的安全告警"
+- "检查是否有异常进程行为"
+- "分析网络连接异常"
+- "提供安全加固建议"
+- "检查是否存在反弹 shell"
+
+## 7. 编译期参数
+
+### 7.1 Go 程序构建
 
 ```bash
 cd ./src/go
 go build -o ../../bin/etracee .
 ```
 
-常见编译期环境变量与用途：
+常用参数：
+- `GOOS`/`GOARCH`：交叉编译
+- `CGO_ENABLED`：是否启用 CGO
+- `-ldflags "-s -w"`：减小体积
 
-- `GOOS`/`GOARCH`：交叉编译目标系统与架构
-- `CGO_ENABLED`：是否启用 CGO（本项目 SQLite 驱动为纯 Go，实现上通常不依赖 CGO）
-- `-ldflags`：链接参数（如 `-s -w` 缩小体积）
-
-说明：运行时会从相对路径加载 `build/etracee.bpf.o`，因此推荐从仓库根目录运行 `./bin/etracee`。
-
-### 5.2 eBPF 对象构建（build/etracee.bpf.o）
-
-该项目 eBPF 程序源代码在 `src/bpf/`，用户态默认加载 `build/etracee.bpf.o`。
-
-构建前置条件（Linux 环境）：
-
-- Clang/LLVM（用于 `-target bpf` 编译）
-- `bpftool`（用于从 BTF 生成 `vmlinux.h`）
-- 具备 BTF 的内核（通常存在 `/sys/kernel/btf/vmlinux`）
-- 系统头文件与 libbpf 头文件（提供 `<bpf/bpf_helpers.h>` 等）
-
-常用构建步骤（示例）：
+### 7.2 eBPF 对象构建
 
 ```bash
-# 1) 生成 vmlinux.h（放在 src/bpf/ 以满足 #include "vmlinux.h"）
+# 生成 vmlinux.h
 bpftool btf dump file /sys/kernel/btf/vmlinux format c > ./src/bpf/vmlinux.h
 
-# 2) 编译 eBPF 对象到 build/etracee.bpf.o
-mkdir -p ./build
+# 编译 eBPF 对象
 clang -O2 -g -target bpf \
   -D__TARGET_ARCH_x86 \
   -I./src/bpf \
@@ -189,51 +257,12 @@ clang -O2 -g -target bpf \
   -o ./build/etracee.bpf.o
 ```
 
-常见编译期参数与用途：
+## 8. 配置文件路径
 
-- `-target bpf`：输出 eBPF 字节码
-- `-O2`：优化等级（常用）
-- `-g`：保留调试信息（便于排障与验证）
-- `-D__TARGET_ARCH_x86`：目标架构宏（按实际机器改为 `arm64` 等）
-- `-I...`：头文件搜索路径（确保能找到 `vmlinux.h` 与 libbpf 头文件）
+| 文件 | 说明 |
+|------|------|
+| `config/database.yaml` | 数据库配置（包含敏感信息） |
+| `config/enhanced_security_config.yaml` | 安全规则配置 |
+| `build/etracee.bpf.o` | eBPF 对象文件 |
 
-## 6. 配置文件路径约定
-
-- 安全规则配置：由 `-config` 指定，默认 `config/enhanced_security_config.yaml`
-- 存储配置：固定读取 `config/storage.yaml`（不存在则回退默认 SQLite：`data/etracee.db`）
-
-## 7. Web 界面状态说明
-
-### 7.1 连接状态指示器
-
-Web 界面顶部的状态指示器会根据监控程序运行状态动态变化：
-
-| 显示文本 | 状态颜色 | 含义 |
-|----------|----------|------|
-| 已连接(等待监控) | 黄色 | Web 服务已连接，监控程序未运行或尚未发送数据 |
-| 监控运行中 | 绿色 | 监控程序正在运行，实时接收事件/告警数据 |
-| 监控未运行 | 黄色 | 超过 10 秒未收到监控数据，监控程序可能已停止 |
-| 连接断开 | 红色 | WebSocket 连接已断开，正在尝试重连 |
-
-状态判断逻辑：
-- 当收到事件 (`event`) 或告警 (`alert`) 消息时，立即更新为"监控运行中"
-- 超过 10 秒未收到数据时，状态变为"监控未运行"
-- 每 3 秒检查一次监控活跃状态
-
-### 7.2 告警状态管理
-
-告警支持以下状态，刷新页面后状态信息不会丢失：
-
-| 状态 | 英文标识 | 说明 |
-|------|----------|------|
-| 新建 | `new` | 新产生的告警，尚未处理 |
-| 已确认 | `acknowledged` | 运维人员已确认该告警 |
-| 处理中 | `in_progress` | 正在处理该告警 |
-| 已解决 | `resolved` | 告警已处理完成 |
-| 误报 | `false_positive` | 标记为误报的告警 |
-
-告警数据持久化：
-- 所有告警状态变更会实时写入 MySQL 数据库
-- 刷新页面时，WebSocket 会推送所有活跃状态（new/acknowledged/in_progress）的告警
-- 前端使用告警 ID 去重，同一告警的状态更新不会产生重复记录
-
+> **安全提示**：`config/database.yaml` 包含敏感信息，请确保文件权限为 `600`。
