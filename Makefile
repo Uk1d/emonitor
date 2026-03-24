@@ -14,6 +14,7 @@ BUILD_DIR := $(PROJECT_ROOT)/build
 SRC_DIR := $(PROJECT_ROOT)/src
 GO_SRC_DIR := $(SRC_DIR)/go
 BPF_SRC_DIR := $(SRC_DIR)/bpf
+WEB_DIR := $(PROJECT_ROOT)/web
 CONFIG_DIR := $(PROJECT_ROOT)/config
 DATA_DIR := $(PROJECT_ROOT)/data
 TEST_DATA_DIR := $(PROJECT_ROOT)/test_data
@@ -163,6 +164,41 @@ build-web: $(BIN_DIR)
 build-all: build build-web build-tools
 	@printf "$(GREEN)所有组件构建完成$(NC)\n"
 
+# ==================== 前端构建 ====================
+.PHONY: web-deps
+web-deps:
+	@printf "$(BLUE)=== 安装前端依赖 ===$(NC)\n"
+	cd $(WEB_DIR) && npm install
+	@printf "$(GREEN)前端依赖安装完成$(NC)\n"
+
+.PHONY: web-dev
+web-dev:
+	@printf "$(BLUE)=== 启动前端开发服务器 ===$(NC)\n"
+	cd $(WEB_DIR) && npm run dev
+
+.PHONY: web-build
+web-build:
+	@printf "$(BLUE)=== 构建前端 ===$(NC)\n"
+	cd $(WEB_DIR) && npm run build
+	@printf "$(GREEN)前端构建完成$(NC)\n"
+
+.PHONY: web-preview
+web-preview:
+	@printf "$(BLUE)=== 预览前端构建 ===$(NC)\n"
+	cd $(WEB_DIR) && npm run preview
+
+.PHONY: web-clean
+web-clean:
+	@printf "$(YELLOW)=== 清理前端构建产物 ===$(NC)\n"
+	rm -rf $(WEB_DIR)/node_modules
+	rm -rf $(WEB_DIR)/dist
+	@printf "$(GREEN)前端清理完成$(NC)\n"
+
+# 构建所有组件（包含前端）
+.PHONY: build-full
+build-full: web-build build-all
+	@printf "$(GREEN)所有组件（包含前端）构建完成$(NC)\n"
+
 $(BIN_DIR):
 	@mkdir -p $(BIN_DIR)
 
@@ -308,8 +344,16 @@ help:
 	@printf "  make build         - 仅构建 Go 用户态程序（需要先构建 eBPF）\n"
 	@printf "  make build-web     - 构建独立 Web 服务（无需 root 权限运行）\n"
 	@printf "  make build-all     - 构建所有组件\n"
+	@printf "  make build-full    - 构建所有组件（包含前端）\n"
 	@printf "  make bpf           - 仅构建 eBPF 程序\n"
 	@printf "  make clean         - 清理构建产物\n"
+	@printf "\n"
+	@printf "$(GREEN)前端命令:$(NC)\n"
+	@printf "  make web-deps      - 安装前端依赖\n"
+	@printf "  make web-dev       - 启动前端开发服务器（端口 3000）\n"
+	@printf "  make web-build     - 构建前端（输出到 Go 静态目录）\n"
+	@printf "  make web-preview   - 预览前端构建\n"
+	@printf "  make web-clean     - 清理前端构建产物\n"
 	@printf "\n"
 	@printf "$(GREEN)运行命令（集成模式）:$(NC)\n"
 	@printf "  make run           - 启动 eTracee（需要 root 权限）\n"

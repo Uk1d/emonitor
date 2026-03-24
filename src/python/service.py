@@ -6,8 +6,7 @@ eTracee Python 后端服务
 import json
 import os
 import sys
-import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 # 添加项目路径
@@ -18,9 +17,6 @@ from flask_cors import CORS
 
 from ai_detector import AIDetector, AIDetectorConfig, anomaly_to_dict
 from report_generator import ReportGenerator, ReportGeneratorConfig
-
-# Go 服务地址（通过环境变量配置，默认本地8888端口）
-GO_SERVICE_URL = os.environ.get('GO_SERVICE_URL', 'http://127.0.0.1:8888')
 
 app = Flask(__name__)
 # 限制 CORS 来源以避免频繁的外部访问
@@ -189,41 +185,13 @@ def generate_report():
     try:
         format_type = request.args.get('format', 'json')
 
-        # 优先从Go服务获取事件和告警数据，如果失败则使用本地缓冲区
-        events = []
-        alerts = []
-
-        try:
-            # 从Go服务获取告警数据
-            alerts_resp = requests.get(f"{GO_SERVICE_URL}/api/alerts?page=1&page_size=500", timeout=5)
-            if alerts_resp.status_code == 200:
-                alerts_data = alerts_resp.json()
-                alerts = alerts_data.get('alerts', [])
-                app.logger.info(f"从Go服务获取到 {len(alerts)} 条告警")
-        except Exception as e:
-            app.logger.warning(f"从Go服务获取告警失败，使用本地缓冲区: {e}")
-            # 回退到本地缓冲区
-            alerts = alerts_buffer[-report_generator.config.max_alerts:]
-
-        try:
-            # 从Go服务获取事件数据
-            events_resp = requests.get(f"{GO_SERVICE_URL}/api/events?page=1&page_size=1000", timeout=5)
-            if events_resp.status_code == 200:
-                events_data = events_resp.json()
-                events = events_data.get('events', [])
-                app.logger.info(f"从Go服务获取到 {len(events)} 条事件")
-        except Exception as e:
-            app.logger.warning(f"从Go服务获取事件失败，使用本地缓冲区: {e}")
-            # 回退到本地缓冲区
-            events = events_buffer[-report_generator.config.max_events:]
-
+        # 从缓冲区获取数据
+        events = events_buffer[-report_generator.config.max_events:]
+        alerts = alerts_buffer[-report_generator.config.max_alerts:]
         # 从 AI 检测器获取异常
         anomalies = [anomaly_to_dict(a)
                    for a in ai_detector.get_recent_anomalies(500)]
         chains = attack_chains_buffer
-
-        # 记录用于生成报告的数据量
-        app.logger.info(f"生成报告数据: {len(events)} 事件, {len(alerts)} 告警, {len(anomalies)} 异常")
 
         # 生成报告
         report_data = report_generator.generate_report(
@@ -289,7 +257,6 @@ def receive_events():
         # 处理告警
         if 'alerts' in data:
             alerts_buffer.extend(data['alerts'])
-            app.logger.info(f"接收到 {len(data['alerts'])} 条告警")
 
         # 处理攻击链
         if 'chains' in data:
@@ -325,14 +292,21 @@ def clear_data():
 
 
 def _add_alert_from_anomaly(anomaly):
-    """从异常创建告警并添加到缓冲区
+    """从异常创建告警并添加到缓冲区"""
+    alert = {
+        'rule_name': 'AI异常检测',
+        'description': anomaly.description,
+        'severity': anomaly.severity.value,
+        'category': anomaly.category,
+        'timestamp': anomaly.detected_at.isoformat(),
+        'pid': anomaly.pid,
+        'process_name': anomaly.process_name,
+        'status': 'active'
+    }
+    alerts_buffer.append(alert)
 
-    注意：此函数现在不再创建告警，只记录异常
-    告警由Go端的规则引擎统一处理，避免重复告警
-    """
-    # 不再创建告警，避免与Go端规则引擎告警重复
-    # 异常数据已通过 /api/ai/anomalies 端点提供
-    pass
+    if len(alerts_buffer) > buffer_max_size:
+        alerts_buffer.pop(0)
 
 
 def _trim_buffers():
@@ -369,7 +343,9 @@ if __name__ == '__main__':
 
     # 从环境变量获取端口
     port = int(os.environ.get('PYTHON_SERVICE_PORT', 9900))
+    # 从环境变量获取监听地址，默认为所有接口
+    host = os.environ.get('PYTHON_SERVICE_HOST', '0.0.0.0')
 
-    print(f"[*] Python 服务启动在端口 {port}")
-    # 只监听本地地址，避免外部访问
-    app.run(host='127.0.0.1', port=port, debug=False, threaded=True)
+    print(f"[*] Python 服务启动在 {host}:{port}")
+    # 监听所有接口，允许外部访问
+    app.run(host=host, port=port, debug=False, threaded=True)
